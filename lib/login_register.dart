@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_login/flutter_login.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'home_page.dart';
+import 'pages/main_menu.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -15,7 +15,8 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   Duration get loginTime => const Duration(milliseconds: 2250);
 
-  final String baseUrl = 'http://10.0.2.2:4000/auth'; // sesuai app.js kamu
+  final String baseUrl =
+      'http://10.0.2.2:4000/auth'; // Ganti sesuai server backend kamu
 
   @override
   void initState() {
@@ -23,7 +24,7 @@ class _LoginPageState extends State<LoginPage> {
     _checkLoginStatus();
   }
 
-  // 🔹 Cek apakah sudah login
+  /// Mengecek apakah user sudah login sebelumnya
   Future<void> _checkLoginStatus() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
@@ -31,12 +32,12 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return;
     if (isLoggedIn) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const HomePage()),
+        MaterialPageRoute(builder: (context) => const MainMenu()),
       );
     }
   }
 
-  // 🔹 Simpan status login & token JWT
+  /// Menyimpan status login dan token
   Future<void> _setLoginStatus(bool status, {String? token}) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', status);
@@ -45,7 +46,7 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  // 🔹 Fungsi Login (terhubung ke backend)
+  /// Fungsi Login
   Future<String?> _authUser(LoginData data) async {
     try {
       final response = await http.post(
@@ -67,14 +68,14 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  // 🔹 Fungsi Register
+  /// Fungsi Register
   Future<String?> _signupUser(SignupData data) async {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/register'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'name': data.additionalSignupData?['name'] ?? 'User Baru',
+          'name': data.additionalSignupData?['name'],
           'email': data.name,
           'password': data.password,
         }),
@@ -92,7 +93,7 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  // 🔹 Lupa password (belum aktif)
+  /// Fitur lupa password (sementara nonaktif)
   Future<String?> _recoverPassword(String email) async {
     return 'Fitur lupa password belum tersedia';
   }
@@ -101,6 +102,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
+        // Background Gradient
         Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -110,27 +112,28 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
         ),
+
+        // 🧾 Form Login
         FlutterLogin(
           title: 'E-Signature',
           logo: const AssetImage('assets/logo.png'),
-
-          // koneksi backend
           onLogin: _authUser,
           onSignup: _signupUser,
           onRecoverPassword: _recoverPassword,
           hideForgotPasswordButton: true,
-
-          userValidator: (value) {
-            if (value == null || value.isEmpty) return 'Email diperlukan';
-            if (!value.contains('@')) return 'Email tidak valid';
-            return null;
-          },
-
           userType: LoginUserType.email,
+          additionalSignupFields: [
+            UserFormField(
+              keyName: 'name',
+              displayName: 'Name',
+              icon: const Icon(Icons.person),
+              fieldValidator: _validateUsername,
+            ),
+          ],
 
           theme: LoginTheme(
-            pageColorLight: Colors.transparent,
-            pageColorDark: Colors.transparent,
+            pageColorLight: Colors.black,
+            pageColorDark: Colors.black,
             primaryColor: Colors.black,
             accentColor: Colors.transparent,
             errorColor: Colors.red,
@@ -141,6 +144,7 @@ class _LoginPageState extends State<LoginPage> {
             ),
             cardTheme: const CardTheme(
               color: Color(0xFF93D9FA),
+              // color: Colors.white24,
               elevation: 8,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.all(Radius.circular(10)),
@@ -149,7 +153,10 @@ class _LoginPageState extends State<LoginPage> {
             inputTheme: const InputDecorationTheme(
               filled: true,
               fillColor: Colors.white,
-              contentPadding: EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+              contentPadding: EdgeInsets.symmetric(
+                vertical: 10,
+                horizontal: 20,
+              ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.all(Radius.circular(10)),
               ),
@@ -161,9 +168,7 @@ class _LoginPageState extends State<LoginPage> {
                 borderRadius: BorderRadius.all(Radius.circular(10)),
                 borderSide: BorderSide(color: Colors.transparent),
               ),
-              labelStyle: TextStyle(
-                color: Colors.black,
-              ),
+              labelStyle: TextStyle(color: Colors.black),
             ),
             buttonTheme: const LoginButtonTheme(
               backgroundColor: Colors.white,
@@ -177,14 +182,25 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
 
-          // 🔹 Ketika animasi login selesai
+          // 🚀 Setelah animasi selesai
           onSubmitAnimationCompleted: () {
             Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (context) => const HomePage()),
+              MaterialPageRoute(builder: (context) => const MainMenu()),
             );
           },
         ),
       ],
     );
+  }
+
+  /// Validasi username
+  static String? _validateUsername(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Username wajib diisi';
+    }
+    if (value.length < 3) {
+      return 'Minimal 3 karakter';
+    }
+    return null;
   }
 }
