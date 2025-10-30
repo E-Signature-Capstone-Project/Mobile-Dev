@@ -5,7 +5,6 @@ import 'verif_log_page.dart';
 import 'request_page.dart';
 import 'notification_page.dart';
 import 'profile_page.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class MainMenu extends StatefulWidget {
   const MainMenu({super.key});
@@ -16,6 +15,8 @@ class MainMenu extends StatefulWidget {
 
 class _MainMenuState extends State<MainMenu> {
   int _selectedIndex = 0;
+
+  final Color primaryRed = const Color(0xFFDA1E28);
 
   final List<String> _titles = [
     'Dashboard',
@@ -41,44 +42,43 @@ class _MainMenuState extends State<MainMenu> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         leadingWidth: 60,
         leading: const SizedBox(),
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
         elevation: 1,
         centerTitle: true,
         title: Text(
           _titles[_selectedIndex],
           style: const TextStyle(
             fontWeight: FontWeight.bold,
-            color: Colors.white,
+            color: Colors.black,
           ),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.account_circle, color: Colors.white),
-            iconSize: 35,
+            icon: const Icon(Icons.account_circle, color: Colors.black87),
+            iconSize: 32,
             onPressed: _goToProfile,
           ),
         ],
       ),
 
-      // Konten utama
       body: IndexedStack(index: _selectedIndex, children: _pages),
 
-      // Desain navbar modern & minimalis
       bottomNavigationBar: Container(
-        margin: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(25),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.white.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, -2),
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
             ),
           ],
         ),
@@ -96,30 +96,26 @@ class _MainMenuState extends State<MainMenu> {
   }
 
   Widget _buildNavItem(IconData icon, String label, int index) {
-    bool isSelected = _selectedIndex == index;
+    final isSelected = _selectedIndex == index;
 
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedIndex = index;
-        });
-      },
+      onTap: () => setState(() => _selectedIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.white.withOpacity(0.1)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
+              ? primaryRed.withOpacity(0.12)
+              : Colors.transparent, // merah saat dipilih
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
-              size: 26,
-              color: isSelected ? Colors.white : Colors.white54,
+              size: 24,
+              color: isSelected ? primaryRed : Colors.black54,
             ),
             const SizedBox(height: 4),
             Text(
@@ -127,7 +123,7 @@ class _MainMenuState extends State<MainMenu> {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? Colors.white : Colors.white54,
+                color: isSelected ? primaryRed : Colors.black54,
               ),
             ),
           ],
