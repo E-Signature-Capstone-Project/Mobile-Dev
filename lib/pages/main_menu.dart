@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../login_register.dart';
 import 'dashboard_page.dart';
 import 'verif_log_page.dart';
 import 'request_page.dart';
@@ -16,10 +15,10 @@ class MainMenu extends StatefulWidget {
 class _MainMenuState extends State<MainMenu> {
   int _selectedIndex = 0;
 
-  final Color primaryRed = const Color(0xFFDA1E28);
+  final Color primaryColorUI = const Color(0xFF003E9C);
 
   final List<String> _titles = [
-    'Dashboard',
+    'E-Signature',
     'Verif Log',
     'Request',
     'Notification',
@@ -42,14 +41,21 @@ class _MainMenuState extends State<MainMenu> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF4FAFE),
       appBar: AppBar(
-        leadingWidth: 60,
-        leading: const SizedBox(),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 1,
         centerTitle: true,
+        leadingWidth: 50,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Image.asset(
+            'assets/logobiru.png',
+            height: 28,
+            fit: BoxFit.contain,
+          ),
+        ),
         title: Text(
           _titles[_selectedIndex],
           style: const TextStyle(
@@ -59,8 +65,8 @@ class _MainMenuState extends State<MainMenu> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.account_circle, color: Colors.black87),
-            iconSize: 32,
+            icon: Icon(Icons.account_circle, color: primaryColorUI),
+            iconSize: 33,
             onPressed: _goToProfile,
           ),
         ],
@@ -105,8 +111,8 @@ class _MainMenuState extends State<MainMenu> {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
           color: isSelected
-              ? primaryRed.withOpacity(0.12)
-              : Colors.transparent, // merah saat dipilih
+              ? primaryColorUI.withOpacity(0.12)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -115,7 +121,7 @@ class _MainMenuState extends State<MainMenu> {
             Icon(
               icon,
               size: 24,
-              color: isSelected ? primaryRed : Colors.black54,
+              color: isSelected ? primaryColorUI : Colors.black54,
             ),
             const SizedBox(height: 4),
             Text(
@@ -123,7 +129,7 @@ class _MainMenuState extends State<MainMenu> {
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? primaryRed : Colors.black54,
+                color: isSelected ? primaryColorUI : Colors.black54,
               ),
             ),
           ],

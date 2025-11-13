@@ -4,8 +4,8 @@ import 'package:flutter_login/flutter_login.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'pages/main_menu.dart';
-import 'pages/add_baseline_sign_page.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'pages/config/api_config.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -18,9 +18,9 @@ class _LoginPageState extends State<LoginPage> {
   Duration get loginTime => const Duration(milliseconds: 2250);
 
   // ====== CONFIG API ======
-  final String apiBase = 'http://10.0.2.2:4000';
-  String get authBase => '$apiBase/auth';
-  String get baselineBase => '$apiBase/baseline';
+
+  final String apiBase = ApiConfig.baseUrl;
+  String get authUrl => ApiConfig.authUrl;
 
   @override
   void initState() {
@@ -69,7 +69,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<String?> _authUser(LoginData data) async {
     try {
       final response = await http.post(
-        Uri.parse('$authBase/login'),
+        Uri.parse('$authUrl/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'email': data.name, 'password': data.password}),
       );
@@ -83,17 +83,18 @@ class _LoginPageState extends State<LoginPage> {
         await _setLoginStatus(true, token: token);
 
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('current_email', email ?? '');
+        await prefs.setString('current_email', email);
 
-        // simpan user info jika tersedia
+        // Simpan user info
         if (result['user'] != null) {
+          await prefs.setInt('user_id', result['user']['user_id']);
           await prefs.setString('user_name', result['user']['name'] ?? '');
           await prefs.setString('user_email', result['user']['email'] ?? '');
         } else {
-          await prefs.setString('user_email', email ?? '');
+          await prefs.setString('user_email', email);
         }
 
-        return null;
+        return null; // login berhasil
       } else {
         return result['error'] ?? 'Login gagal';
       }
@@ -106,7 +107,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<String?> _signupUser(SignupData data) async {
     try {
       final response = await http.post(
-        Uri.parse('$authBase/register'),
+        Uri.parse('$authUrl/register'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'name': data.additionalSignupData?['name'],
@@ -118,8 +119,9 @@ class _LoginPageState extends State<LoginPage> {
       final result = jsonDecode(response.body);
 
       if (response.statusCode == 201) {
+        // auto login setelah register
         final loginRes = await http.post(
-          Uri.parse('$authBase/login'),
+          Uri.parse('$authUrl/login'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'email': data.name, 'password': data.password}),
         );
@@ -141,7 +143,15 @@ class _LoginPageState extends State<LoginPage> {
             loginJson['user']?['email'] ?? (data.name ?? ''),
           );
 
-          return null;
+          // ✅ simpan user_id juga setelah register
+          if (loginJson['user'] != null) {
+            await prefs.setInt(
+              'user_id',
+              loginJson['user']['user_id'],
+            ); // FIXED ✅
+          }
+
+          return null; // registrasi + login sukses
         } else {
           return loginJson['error'] ?? 'Registrasi ok, tapi auto-login gagal';
         }
@@ -159,27 +169,8 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   // warna ui
-  final Color primaryRed = const Color(0xFFDA1E28);
+  final Color primaryColorUI = Colors.blue;
   final Color colorBG = Colors.white;
-
-  // CEK BASELINE DARI BACKEND
-  Future<bool> _hasAnyBaseline() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-    if (token.isEmpty) return false;
-
-    final res = await http.get(
-      Uri.parse('$baselineBase/get'),
-      headers: {'Authorization': 'Bearer $token'},
-    );
-
-    if (res.statusCode == 200) {
-      final json = jsonDecode(res.body);
-      final count = (json['count'] as num?)?.toInt() ?? 0;
-      return count > 0;
-    }
-    return false;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -192,13 +183,13 @@ class _LoginPageState extends State<LoginPage> {
             colorScheme: const ColorScheme.light(
               primary: Colors.white,
               secondary: Colors.black,
-              background: Colors.white,
+              surface: Colors.white,
             ),
             iconTheme: const IconThemeData(color: Colors.black),
           ),
           child: FlutterLogin(
             title: 'E-Signature',
-            logo: const AssetImage('assets/logo.png'),
+            logo: const AssetImage('assets/logobiru.png'),
             onLogin: _authUser,
             onSignup: _signupUser,
             onRecoverPassword: _recoverPassword,
@@ -215,8 +206,8 @@ class _LoginPageState extends State<LoginPage> {
             theme: LoginTheme(
               pageColorLight: colorBG,
               pageColorDark: colorBG,
-              primaryColor: primaryRed,
-              accentColor: primaryRed,
+              primaryColor: primaryColorUI,
+              accentColor: primaryColorUI,
               errorColor: Colors.white,
               titleStyle: GoogleFonts.montserrat(
                 color: Colors.black,
@@ -225,7 +216,7 @@ class _LoginPageState extends State<LoginPage> {
                 letterSpacing: 1.2,
               ),
               cardTheme: CardTheme(
-                color: primaryRed,
+                color: primaryColorUI,
                 elevation: 8,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),

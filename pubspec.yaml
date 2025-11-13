@@ -10,11 +10,18 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_login: ^6.0.0
-  http: ^1.5.0
-  shared_preferences: ^2.5.3
-  signature: ^5.4.0
-  image_picker: ^1.0.8
   google_fonts: ^6.2.1
+  intl: ^0.20.2
+  http: ^1.2.2
+  http_parser: ^4.0.2
+  shared_preferences: ^2.3.2
+  image_picker: ^1.1.1
+  file_picker: ^10.3.3
+  signature: ^5.4.0
+  syncfusion_flutter_pdfviewer: ^31.2.5
+  device_info_plus: ^12.2.0
+  path_provider: ^2.1.1
+  permission_handler: ^11.0.0
 
 dev_dependencies:
   flutter_test:
@@ -24,4 +31,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/logo.png
+    - assets/logobiru.png
+    - assets/logomerah.png

@@ -5,8 +5,10 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../login_register.dart';
-import 'add_baseline_sign_page.dart';
 import 'package:http_parser/http_parser.dart';
+
+import 'widget/add_baseline_dialog.dart';
+import 'config/api_config.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -16,9 +18,9 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final String apiBase = 'http://10.0.2.2:4000';
-  String get authBase => '$apiBase/auth';
-  String get baselineBase => '$apiBase/signature_baseline';
+  final String apiBase = ApiConfig.baseUrl;
+  String get authUrl => ApiConfig.authUrl;
+  String get baselineUrl => ApiConfig.baselineUrl;
 
   bool isLoading = true;
   String? email;
@@ -28,7 +30,7 @@ class _ProfilePageState extends State<ProfilePage> {
   List<Map<String, dynamic>> baselines = [];
 
   // warna
-  final Color primaryRed = const Color(0xFFDA1E28);
+  final Color primaryColorUI = const Color(0xFF003E9C);
   final Color ColorBG = const Color(0xFFF4FAFE);
 
   @override
@@ -48,7 +50,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       // profile
       final resMe = await http.get(
-        Uri.parse("$authBase/me"),
+        Uri.parse("$authUrl/me"),
         headers: {"Authorization": "Bearer $token"},
       );
 
@@ -65,7 +67,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       // baselines
       final resBase = await http.get(
-        Uri.parse(baselineBase),
+        Uri.parse(baselineUrl),
         headers: {"Authorization": "Bearer $token"},
       );
 
@@ -86,14 +88,19 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
+
     await prefs.remove('token');
     await prefs.remove('isLoggedIn');
     await prefs.remove('current_email');
+    await prefs.remove('user_id');
+    await prefs.remove('user_name');
+    await prefs.remove('user_email');
 
     if (!mounted) return;
-    Navigator.of(
-      context,
-    ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginPage()));
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (route) => false, // hapus semua route sebelumnya
+    );
   }
 
   // pop up logout
@@ -123,7 +130,7 @@ class _ProfilePageState extends State<ProfilePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.logout_rounded, color: primaryRed, size: 55),
+                Icon(Icons.logout_rounded, color: primaryColorUI, size: 55),
                 const SizedBox(height: 20),
                 const Text(
                   "Logout Akun",
@@ -171,7 +178,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     Expanded(
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryRed,
+                          backgroundColor: primaryColorUI,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -216,16 +223,6 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  // ====== TAMBAH via gambar (navigasi ke AddBaselineSignPage) ======
-  Future<void> _goDrawForAdd({int? replaceBaselineId}) async {
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const AddBaselineSignPage()),
-    );
-    await _fetchProfileAndBaselines();
-  }
-
   // ====== UPLOAD ke backend ======
   Future<void> _uploadBaseline(File file, {int? replaceBaselineId}) async {
     try {
@@ -233,10 +230,10 @@ class _ProfilePageState extends State<ProfilePage> {
       final token = prefs.getString('token') ?? '';
       if (token.isEmpty) return;
 
-      // final req = http.MultipartRequest('POST', Uri.parse('$baselineBase/add'));
+      // final req = http.MultipartRequest('POST', Uri.parse('$baselineUrl/add'));
       final endpoint = replaceBaselineId != null
-          ? '$baselineBase/update/$replaceBaselineId'
-          : '$baselineBase/add';
+          ? '$baselineUrl/update/$replaceBaselineId'
+          : '$baselineUrl/add';
 
       final req = http.MultipartRequest('POST', Uri.parse(endpoint));
 
@@ -254,75 +251,131 @@ class _ProfilePageState extends State<ProfilePage> {
       final json = jsonDecode(body);
 
       if (resp.statusCode == 201) {
-        _toast('Baseline berhasil ditambahkan');
+        _showSuccessDialog('Baseline berhasil ditambahkan!');
         await _fetchProfileAndBaselines();
       } else {
-        _toast(json['error'] ?? 'Gagal menambahkan baseline');
+        final errorMsg = json['error'] ?? 'Gagal menambahkan baseline';
+        _showErrorDialog(errorMsg);
       }
     } catch (e) {
       _toast('Gagal mengunggah baseline: $e');
     }
   }
 
-  // ====== POPUP Tambah (Gambar / Upload) ======
-  void _showAddSignatureDialog() {
-    if (baselines.length >= 5) {
-      _toast('Maksimal 5 signature baseline.');
-      return;
-    }
+  // ====== POPUP Success ======
+  void _showSuccessDialog(String message) {
     showDialog(
       context: context,
       builder: (_) => Dialog(
         backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                "Tambah Signature",
-                style: TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
+              Icon(Icons.check_circle_outline, color: primaryColorUI, size: 48),
               const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _goDrawForAdd();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryRed,
-                  minimumSize: const Size(double.infinity, 45),
-                ),
-                icon: const Icon(Icons.draw, color: Colors.white),
-                label: const Text(
-                  "Gambar Signature",
-                  style: TextStyle(color: Colors.white),
+              const Text(
+                "Berhasil",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
                 ),
               ),
               const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _pickAndUploadFromGallery();
-                },
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.black87, fontSize: 14),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryRed,
-                  minimumSize: const Size(double.infinity, 45),
+                  backgroundColor: primaryColorUI,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
-                icon: const Icon(Icons.upload, color: Colors.white),
-                label: const Text(
-                  "Upload dari Galeri",
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  "Tutup",
                   style: TextStyle(color: Colors.white),
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ====== POPUP Error ======
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+              const SizedBox(height: 16),
+              const Text(
+                "Gagal",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.black87, fontSize: 14),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColorUI,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  "Tutup",
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ====== POPUP Tambah Baseline (Draw / Upload langsung di dialog) ======
+  void _showAddSignatureDialog() {
+    if (baselines.length >= 5) {
+      _toast('Maksimal 5 signature baseline.');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AddBaselineDialog(
+        primaryColor: primaryColorUI,
+        onSubmit: (file) async {
+          Navigator.pop(context);
+          await _uploadBaseline(file);
+        },
       ),
     );
   }
@@ -358,69 +411,15 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 onTap: () {
                   Navigator.pop(context);
-                  _showReplaceDialog(baselineId);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Fitur Belum Bisa digunakan'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
                 },
               ),
               const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ====== DIALOG Replace pilih sumber ======
-  void _showReplaceDialog(int baselineId) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                "Ganti Signature",
-                style: TextStyle(
-                  color: Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _goDrawForAdd(replaceBaselineId: baselineId);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryRed,
-                  minimumSize: const Size(double.infinity, 45),
-                ),
-                icon: const Icon(Icons.draw, color: Colors.white),
-                label: const Text(
-                  "Gambar Signature Baru",
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _pickAndUploadFromGallery(replaceBaselineId: baselineId);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryRed,
-                  minimumSize: const Size(double.infinity, 45),
-                ),
-                icon: const Icon(Icons.upload, color: Colors.white),
-                label: const Text(
-                  "Upload dari Galeri",
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
             ],
           ),
         ),
@@ -451,7 +450,7 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: primaryRed),
+            style: ElevatedButton.styleFrom(backgroundColor: primaryColorUI),
             child: const Text('Ya', style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -541,7 +540,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       onPressed: _showLogoutDialog,
                       icon: const Icon(Icons.logout, color: Colors.white),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryRed,
+                        backgroundColor: primaryColorUI,
                         minimumSize: const Size(double.infinity, 44),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -632,7 +631,11 @@ class _ProfilePageState extends State<ProfilePage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.add_circle_outline, size: 36, color: primaryRed),
+                    Icon(
+                      Icons.add_circle_outline,
+                      size: 36,
+                      color: primaryColorUI,
+                    ),
                     const SizedBox(height: 8),
                     const Text(
                       "Tambah Signature",
@@ -706,8 +709,14 @@ class _ProfilePageState extends State<ProfilePage> {
                       _roundIconButton(
                         icon: Icons.swap_horiz,
                         onTap: () {
-                          if (baselineId != null)
-                            _showReplaceDialog(baselineId);
+                          if (baselineId != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Fitur Belum Bisa digunakan'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
                         },
                       ),
                       const SizedBox(width: 6),
