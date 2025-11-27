@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+
 import 'signature_draw_or_upload_dialog.dart';
+import 'request_signature_dialog.dart';
 import '../config/api_config.dart';
 
 class DocumentDetailDialog extends StatelessWidget {
@@ -14,7 +16,6 @@ class DocumentDetailDialog extends StatelessWidget {
     this.onChanged,
   });
 
-  /// Ambil URL file PDF dari API config
   String _resolveFileUrl(Map<String, dynamic> doc) {
     final explicit = (doc['file_url'] ?? '').toString();
     if (explicit.isNotEmpty) return explicit;
@@ -60,7 +61,7 @@ class DocumentDetailDialog extends StatelessWidget {
             ),
             const SizedBox(height: 20),
 
-            // Tombol Tandatangani Dokumen
+            // Tombol Tandatangani Dokumen (self sign)
             ElevatedButton.icon(
               icon: const Icon(Icons.edit, color: Colors.white),
               label: const Text(
@@ -89,15 +90,21 @@ class DocumentDetailDialog extends StatelessWidget {
 
             const SizedBox(height: 10),
 
-            // Tombol Request TTD
+            // Tombol Request TTD (pakai email)
             OutlinedButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Fitur Request TTD belum tersedia."),
-                    backgroundColor: Colors.orangeAccent,
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (_) => RequestSignatureDialog(
+                    document: document,
+                    primaryColor: primaryColor,
                   ),
                 );
+
+                if (ok == true) {
+                  onChanged?.call();
+                  Navigator.pop(context); // tutup dialog ini
+                }
               },
               icon: Icon(Icons.outgoing_mail, color: primaryColor),
               label: Text("Request TTD", style: TextStyle(color: primaryColor)),

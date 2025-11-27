@@ -1,14 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../login_register.dart';
 import 'package:http_parser/http_parser.dart';
 
 import 'widget/add_baseline_dialog.dart';
 import 'config/api_config.dart';
+import 'widget/logout_helper.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -31,7 +31,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   // warna
   final Color primaryColorUI = const Color(0xFF003E9C);
-  final Color ColorBG = const Color(0xFFF4FAFE);
+  final Color colorBG = const Color(0xFFF4FAFE);
 
   @override
   void initState() {
@@ -86,29 +86,14 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    await prefs.remove('token');
-    await prefs.remove('isLoggedIn');
-    await prefs.remove('current_email');
-    await prefs.remove('user_id');
-    await prefs.remove('user_name');
-    await prefs.remove('user_email');
-
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-      (route) => false, // hapus semua route sebelumnya
-    );
-  }
-
   // pop up logout
   void _showLogoutDialog() {
+    final rootContext = context;
+
     showDialog(
-      context: context,
+      context: rootContext,
       barrierDismissible: true,
-      builder: (context) {
+      builder: (dialogCtx) {
         return Dialog(
           backgroundColor: Colors.white,
           shape: RoundedRectangleBorder(
@@ -164,7 +149,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             color: Colors.black.withOpacity(0.2),
                           ),
                         ),
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () => Navigator.pop(dialogCtx),
                         child: const Text(
                           "Batal",
                           style: TextStyle(
@@ -185,9 +170,11 @@ class _ProfilePageState extends State<ProfilePage> {
                           ),
                           elevation: 0,
                         ),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _logout();
+                        onPressed: () async {
+                          // tutup dialog pakai context dialog
+                          Navigator.pop(dialogCtx);
+                          // logout & pindah ke login pakai context root (halaman)
+                          await performLogout(rootContext);
                         },
                         child: const Text(
                           "Logout",
@@ -208,29 +195,13 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ====== TAMBAH dari galeri ======
-  Future<void> _pickAndUploadFromGallery({int? replaceBaselineId}) async {
-    try {
-      final picker = ImagePicker();
-      final file = await picker.pickImage(source: ImageSource.gallery);
-      if (file == null) return;
-      await _uploadBaseline(
-        File(file.path),
-        replaceBaselineId: replaceBaselineId,
-      );
-    } catch (e) {
-      _toast('Gagal membuka galeri: $e');
-    }
-  }
-
-  // ====== UPLOAD ke backend ======
+  // ====== UPLOAD baseline ke backend ======
   Future<void> _uploadBaseline(File file, {int? replaceBaselineId}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token') ?? '';
       if (token.isEmpty) return;
 
-      // final req = http.MultipartRequest('POST', Uri.parse('$baselineUrl/add'));
       final endpoint = replaceBaselineId != null
           ? '$baselineUrl/update/$replaceBaselineId'
           : '$baselineUrl/add';
@@ -360,7 +331,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ====== POPUP Tambah Baseline (Draw / Upload langsung di dialog) ======
+  // ====== POPUP Tambah Baseline (pakai dialog custom) ======
   void _showAddSignatureDialog() {
     if (baselines.length >= 5) {
       _toast('Maksimal 5 signature baseline.');
@@ -380,7 +351,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // ====== SHEET actions item Replace ======
+  // ====== SHEET actions item (untuk replace, nanti bisa diisi) ======
   void _showItemActions(int baselineId) {
     showModalBottomSheet(
       context: context,
@@ -433,35 +404,10 @@ class _ProfilePageState extends State<ProfilePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Future<bool?> _confirm({
-    required String title,
-    required String message,
-  }) async {
-    return showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: Text(title, style: const TextStyle(color: Colors.black)),
-        content: Text(message, style: const TextStyle(color: Colors.black87)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Batal', style: TextStyle(color: Colors.black)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: primaryColorUI),
-            child: const Text('Ya', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: ColorBG,
+      backgroundColor: colorBG,
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
@@ -477,11 +423,9 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
       ),
       body: isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Colors.redAccent),
-            )
+          ? Center(child: CircularProgressIndicator(color: primaryColorUI))
           : RefreshIndicator(
-              color: Colors.redAccent,
+              color: primaryColorUI,
               backgroundColor: Colors.white,
               onRefresh: _fetchProfileAndBaselines,
               child: SingleChildScrollView(

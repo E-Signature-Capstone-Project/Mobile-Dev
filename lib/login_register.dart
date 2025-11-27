@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_login/flutter_login.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'pages/main_menu.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+import 'pages/main_menu.dart';
 import 'pages/config/api_config.dart';
+import 'pages/admin/admin_verif_log_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -18,7 +20,6 @@ class _LoginPageState extends State<LoginPage> {
   Duration get loginTime => const Duration(milliseconds: 2250);
 
   // ====== CONFIG API ======
-
   final String apiBase = ApiConfig.baseUrl;
   String get authUrl => ApiConfig.authUrl;
 
@@ -30,28 +31,37 @@ class _LoginPageState extends State<LoginPage> {
 
   /// Mengecek apakah user sudah login sebelumnya
   Future<void> _checkLoginStatus() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final prefs = await SharedPreferences.getInstance();
     final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
 
     if (!mounted) return;
     if (isLoggedIn) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => const MainMenu()),
-      );
+      final role = prefs.getString('role') ?? 'user';
+
+      Widget dest;
+      if (role == 'admin') {
+        dest = const AdminVerifLogPage();
+      } else {
+        dest = const MainMenu();
+      }
+
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (context) => dest));
     }
   }
 
   /// Simpan status login & token
   Future<void> _setLoginStatus(bool status, {String? token}) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isLoggedIn', status);
     if (token != null) {
       await prefs.setString('token', token);
     }
   }
 
-  // decode email dari JWT token
-  String? _emailFromJwt(String token) {
+  /// Decode payload JWT (user_id, email, role)
+  Map<String, dynamic>? _decodeJwtPayload(String token) {
     try {
       final parts = token.split('.');
       if (parts.length != 3) return null;
@@ -59,7 +69,10 @@ class _LoginPageState extends State<LoginPage> {
         base64Url.decode(base64Url.normalize(parts[1])),
       );
       final map = jsonDecode(payload);
-      return map['email'] as String?;
+      if (map is Map<String, dynamic>) {
+        return map;
+      }
+      return Map<String, dynamic>.from(map as Map);
     } catch (_) {
       return null;
     }
@@ -77,33 +90,47 @@ class _LoginPageState extends State<LoginPage> {
       final result = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        final token = result['token'];
-        final email = _emailFromJwt(token) ?? data.name;
+        final token = result['token'] as String?;
+        if (token == null) {
+          return 'Token tidak ditemukan di response';
+        }
 
+        // decode payload
+        final payload = _decodeJwtPayload(token);
+        final email = payload?['email']?.toString() ?? data.name;
+        final role = payload?['role']?.toString() ?? 'user';
+        final userIdRaw = payload?['user_id'];
+        final int? userId = userIdRaw is int
+            ? userIdRaw
+            : (userIdRaw is num ? userIdRaw.toInt() : null);
+
+        // simpan login status + token
         await _setLoginStatus(true, token: token);
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('current_email', email);
+        await prefs.setString('user_email', email);
+        await prefs.setString('role', role);
 
-        // Simpan user info
+        if (userId != null) {
+          await prefs.setInt('user_id', userId);
+        }
+
+        // optional simpan name kalau nanti mau diisi dari /me
         if (result['user'] != null) {
-          await prefs.setInt('user_id', result['user']['user_id']);
           await prefs.setString('user_name', result['user']['name'] ?? '');
-          await prefs.setString('user_email', result['user']['email'] ?? '');
-        } else {
-          await prefs.setString('user_email', email);
         }
 
         return null; // login berhasil
       } else {
-        return result['error'] ?? 'Login gagal';
+        return result['error']?.toString() ?? 'Login gagal';
       }
     } catch (e) {
       return 'Gagal terhubung ke server: $e';
     }
   }
 
-  /// REGISTER
+  /// REGISTER (user biasa, bukan admin)
   Future<String?> _signupUser(SignupData data) async {
     try {
       final response = await http.post(
@@ -128,35 +155,41 @@ class _LoginPageState extends State<LoginPage> {
 
         final loginJson = jsonDecode(loginRes.body);
         if (loginRes.statusCode == 200) {
-          final token = loginJson['token'];
+          final token = loginJson['token'] as String?;
+          if (token == null) {
+            return 'Registrasi berhasil, tapi token login tidak ditemukan';
+          }
+
           await _setLoginStatus(true, token: token);
 
+          final payload = _decodeJwtPayload(token);
+          final email = payload?['email']?.toString() ?? (data.name ?? '');
+          final role = payload?['role']?.toString() ?? 'user';
+          final userIdRaw = payload?['user_id'];
+          final int? userId = userIdRaw is int
+              ? userIdRaw
+              : (userIdRaw is num ? userIdRaw.toInt() : null);
+
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('current_email', data.name ?? '');
+          await prefs.setString('current_email', email);
+          await prefs.setString('user_email', email);
           await prefs.setString(
             'user_name',
-            loginJson['user']?['name'] ??
-                (data.additionalSignupData?['name'] ?? ''),
+            data.additionalSignupData?['name'] ?? '',
           );
-          await prefs.setString(
-            'user_email',
-            loginJson['user']?['email'] ?? (data.name ?? ''),
-          );
+          await prefs.setString('role', role);
 
-          // ✅ simpan user_id juga setelah register
-          if (loginJson['user'] != null) {
-            await prefs.setInt(
-              'user_id',
-              loginJson['user']['user_id'],
-            ); // FIXED ✅
+          if (userId != null) {
+            await prefs.setInt('user_id', userId);
           }
 
           return null; // registrasi + login sukses
         } else {
-          return loginJson['error'] ?? 'Registrasi ok, tapi auto-login gagal';
+          return loginJson['error']?.toString() ??
+              'Registrasi ok, tapi auto-login gagal';
         }
       } else {
-        return result['error'] ?? 'Registrasi gagal';
+        return result['error']?.toString() ?? 'Registrasi gagal';
       }
     } catch (e) {
       return 'Tidak bisa terhubung ke server: $e';
@@ -244,10 +277,9 @@ class _LoginPageState extends State<LoginPage> {
                   borderRadius: BorderRadius.all(Radius.circular(10)),
                 ),
               ),
-
               buttonTheme: LoginButtonTheme(
                 backgroundColor: Colors.white,
-                splashColor: Colors.white.withOpacity(0.2),
+                splashColor: Colors.white70,
                 highlightColor: Colors.white,
                 elevation: 4.0,
               ),
@@ -258,9 +290,19 @@ class _LoginPageState extends State<LoginPage> {
             ),
             onSubmitAnimationCompleted: () async {
               if (!mounted) return;
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(builder: (_) => const MainMenu()),
-              );
+              final prefs = await SharedPreferences.getInstance();
+              final role = prefs.getString('role') ?? 'user';
+
+              Widget dest;
+              if (role == 'admin') {
+                dest = const AdminVerifLogPage();
+              } else {
+                dest = const MainMenu();
+              }
+
+              Navigator.of(
+                context,
+              ).pushReplacement(MaterialPageRoute(builder: (_) => dest));
             },
           ),
         ),

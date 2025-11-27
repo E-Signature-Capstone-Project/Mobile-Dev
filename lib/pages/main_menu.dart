@@ -1,9 +1,15 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'dashboard_page.dart';
 import 'verif_log_page.dart';
 import 'request_page.dart';
 import 'notification_page.dart';
 import 'profile_page.dart';
+import 'config/api_config.dart';
 
 class MainMenu extends StatefulWidget {
   const MainMenu({super.key});
@@ -16,6 +22,9 @@ class _MainMenuState extends State<MainMenu> {
   int _selectedIndex = 0;
 
   final Color primaryColorUI = const Color(0xFF003E9C);
+  String get requestsUrl => ApiConfig.requestsUrl;
+
+  bool _hasUnreadNotifications = false;
 
   final List<String> _titles = [
     'E-Signature',
@@ -31,11 +40,115 @@ class _MainMenuState extends State<MainMenu> {
     NotificationPage(),
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _checkNotificationsForBadge();
+  }
+
+  Future<String?> _token() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString("token");
+  }
+
+  DateTime _parseDate(dynamic v) {
+    if (v == null) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    final parsed = DateTime.tryParse(v.toString());
+    return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  /// Cek apakah ada notif (request) yang belum dibaca berdasarkan read_notification_ids
+  Future<void> _checkNotificationsForBadge() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = await _token() ?? '';
+      final savedRead = prefs.getStringList('read_notification_ids') ?? [];
+      final readIds = savedRead
+          .map((e) => int.tryParse(e))
+          .where((e) => e != null)
+          .cast<int>()
+          .toSet();
+
+      final incomingRes = await http.get(
+        Uri.parse('$requestsUrl/incoming'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final outgoingRes = await http.get(
+        Uri.parse('$requestsUrl/outgoing'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      List incoming = [];
+      List outgoing = [];
+
+      if (incomingRes.statusCode == 200) {
+        final decoded = jsonDecode(incomingRes.body);
+        if (decoded is Map && decoded['success'] == true) {
+          incoming = (decoded['data'] ?? []) as List;
+        }
+      }
+
+      if (outgoingRes.statusCode == 200) {
+        final decoded = jsonDecode(outgoingRes.body);
+        if (decoded is Map && decoded['success'] == true) {
+          outgoing = (decoded['data'] ?? []) as List;
+        }
+      }
+
+      bool hasUnread = false;
+
+      // incoming request → semua dianggap notif
+      for (final r in incoming) {
+        final item = r as Map<String, dynamic>;
+        final int? reqId = item['request_id'] is int
+            ? item['request_id'] as int
+            : int.tryParse((item['request_id'] ?? '').toString());
+        if (reqId == null) continue;
+        if (!readIds.contains(reqId)) {
+          hasUnread = true;
+          break;
+        }
+      }
+
+      // kalau belum ketemu unread di incoming, cek outgoing approved/rejected
+      if (!hasUnread) {
+        for (final r in outgoing) {
+          final item = r as Map<String, dynamic>;
+          final status = (item['status'] ?? 'pending').toString().toLowerCase();
+          if (status == 'pending') continue;
+          final int? reqId = item['request_id'] is int
+              ? item['request_id'] as int
+              : int.tryParse((item['request_id'] ?? '').toString());
+          if (reqId == null) continue;
+          if (!readIds.contains(reqId)) {
+            hasUnread = true;
+            break;
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() => _hasUnreadNotifications = hasUnread);
+      }
+    } catch (e) {
+      debugPrint('Error checkNotificationsForBadge: $e');
+    }
+  }
+
   void _goToProfile() {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ProfilePage()),
     );
+  }
+
+  Future<void> _onTabTap(int index) async {
+    setState(() => _selectedIndex = index);
+
+    // setiap pindah tab, refresh status badge
+    await _checkNotificationsForBadge();
   }
 
   @override
@@ -71,9 +184,7 @@ class _MainMenuState extends State<MainMenu> {
           ),
         ],
       ),
-
       body: IndexedStack(index: _selectedIndex, children: _pages),
-
       bottomNavigationBar: Container(
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -103,9 +214,10 @@ class _MainMenuState extends State<MainMenu> {
 
   Widget _buildNavItem(IconData icon, String label, int index) {
     final isSelected = _selectedIndex == index;
+    final isNotificationTab = label == 'Notification';
 
     return GestureDetector(
-      onTap: () => setState(() => _selectedIndex = index),
+      onTap: () => _onTabTap(index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -118,10 +230,28 @@ class _MainMenuState extends State<MainMenu> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 24,
-              color: isSelected ? primaryColorUI : Colors.black54,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  icon,
+                  size: 24,
+                  color: isSelected ? primaryColorUI : Colors.black54,
+                ),
+                if (isNotificationTab && _hasUnreadNotifications)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      height: 8,
+                      width: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.redAccent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(

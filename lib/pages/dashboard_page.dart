@@ -32,10 +32,13 @@ class _DashboardPageState extends State<DashboardPage> {
   bool isLoading = true;
   List<Map<String, dynamic>> documents = [];
   List<dynamic> verifLogs = [];
-  final Map<int, String> latestLogStatusByDoc =
-      {}; // document_id -> valid/invalid
+  final Map<int, String> latestLogStatusByDoc = {}; // dari log valid/invalid
 
   List<Map<String, dynamic>> baselines = [];
+
+  List<dynamic> outgoingRequests = [];
+  final Map<int, String> requestStatusByDoc =
+      {}; // document_id -> pending/approved/rejected
 
   // ====== THEME ======
   final Color primaryColorUI = const Color(0xFF003E9C);
@@ -52,7 +55,8 @@ class _DashboardPageState extends State<DashboardPage> {
     await Future.wait([
       _fetchDocuments(),
       _fetchLogs(),
-      _fetchBaselines(), // ✅ NEW
+      _fetchBaselines(),
+      _fetchOutgoingRequests(),
     ]);
     _recomputeEffectiveStatuses();
     if (mounted) setState(() {});
@@ -108,17 +112,96 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString("token") ?? "";
+
       final res = await http.get(
         Uri.parse(logsUrl),
         headers: {"Authorization": "Bearer $token"},
       );
+
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        verifLogs = (data['data'] ?? []) as List;
+        final decoded = jsonDecode(res.body);
+
+        if (decoded is List) {
+          verifLogs = List<Map<String, dynamic>>.from(decoded);
+        } else if (decoded is Map && decoded['data'] is List) {
+          verifLogs = List<Map<String, dynamic>>.from(
+            decoded['data'] as List<dynamic>,
+          );
+        } else {
+          verifLogs = [];
+        }
       }
     } catch (e) {
       debugPrint('Error fetch logs: $e');
     }
+  }
+
+  Future<void> _fetchOutgoingRequests() async {
+    try {
+      final token = await _token() ?? "";
+      final res = await http.get(
+        Uri.parse('${ApiConfig.requestsUrl}/outgoing'),
+        headers: {"Authorization": "Bearer $token"},
+      );
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        outgoingRequests = (data['data'] ?? []) as List;
+        _recomputeRequestStatuses();
+      }
+    } catch (e) {
+      debugPrint('Error fetch outgoing requests: $e');
+    }
+  }
+
+  void _recomputeRequestStatuses() {
+    requestStatusByDoc.clear();
+
+    for (final r in outgoingRequests) {
+      final Map<String, dynamic> item = r as Map<String, dynamic>;
+      final Map<String, dynamic>? doc =
+          item['Document'] as Map<String, dynamic>?;
+
+      final int? docId = _parseDocId(doc);
+      if (docId == null) continue;
+
+      final DateTime createdAt = _parseDate(item['created_at']);
+
+      if (requestStatusByDoc.containsKey(docId)) {
+        final existing =
+            outgoingRequests.firstWhere((e) {
+                  final Map<String, dynamic>? d =
+                      (e as Map<String, dynamic>)['Document'];
+                  final int? id = _parseDocId(d);
+                  return id == docId;
+                }, orElse: () => item)
+                as Map<String, dynamic>;
+
+        final DateTime existingCreatedAt = _parseDate(existing['created_at']);
+
+        if (existingCreatedAt.isAfter(createdAt)) continue;
+      }
+
+      requestStatusByDoc[docId] = (item['status'] ?? 'pending').toString();
+    }
+  }
+
+  int? _parseDocId(Map<String, dynamic>? doc) {
+    if (doc == null) return null;
+
+    final raw = doc['document_id'];
+
+    if (raw is int) return raw;
+
+    return int.tryParse(raw?.toString() ?? '');
+  }
+
+  DateTime _parseDate(dynamic value) {
+    if (value == null) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    final parsed = DateTime.tryParse(value.toString());
+    return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   // ✅ NEW: ambil baseline user
@@ -176,27 +259,55 @@ class _DashboardPageState extends State<DashboardPage> {
   // Warna card untuk status gabungan
   Color _cardColor(String status) {
     switch (status.toLowerCase()) {
-      case 'signed':
       case 'valid':
+      case 'signed':
+      case 'request_approved':
         return Colors.green.shade50;
-      case 'rejected':
       case 'invalid':
+      case 'rejected':
+      case 'request_rejected':
         return Colors.red.shade50;
+      case 'request_pending':
+        return Colors.blue.shade50;
+      case 'draft':
       default:
-        return Colors.orange.shade50; // pending
+        return Colors.orange.shade50;
     }
   }
 
   // Status efektif = jika ada log terbaru valid/invalid → pakai itu; selain itu pakai status dokumen
   String _effectiveStatusForDoc(Map<String, dynamic> doc) {
-    final rawStatus = (doc['status'] ?? 'pending').toString().toLowerCase();
     final int? docId = doc['document_id'] is int
         ? doc['document_id'] as int
         : int.tryParse((doc['document_id'] ?? '').toString());
+
+    // 1. cek log verifikasi valid/invalid
     if (docId != null && latestLogStatusByDoc.containsKey(docId)) {
-      return latestLogStatusByDoc[docId]!;
+      return latestLogStatusByDoc[docId]!; // valid / invalid
     }
-    return rawStatus;
+
+    // 2. cek request outgoing
+    if (docId != null && requestStatusByDoc.containsKey(docId)) {
+      final reqStatus = requestStatusByDoc[docId]!.toLowerCase();
+      switch (reqStatus) {
+        case 'pending':
+          return 'request_pending';
+        case 'approved':
+          return 'request_approved';
+        case 'rejected':
+          return 'request_rejected';
+      }
+    }
+
+    // 3. status dokumen mentah
+    final rawStatus = (doc['status'] ?? '').toString().toLowerCase();
+
+    if (rawStatus.isEmpty || rawStatus == 'pending') {
+      // dokumen baru / belum diapa-apakan -> Draft
+      return 'draft';
+    }
+
+    return rawStatus; // signed, rejected, dll
   }
 
   // Resolve URL file
@@ -346,10 +457,12 @@ class _DashboardPageState extends State<DashboardPage> {
           return 'Valid';
         case 'invalid':
           return 'Tidak Valid';
+        case 'approved':
+          return 'Request Disetujui';
         case 'rejected':
-          return 'Ditolak';
+          return 'Request Ditolak';
         default:
-          return 'Pending';
+          return 'Belum Diproses'; // pending / default
       }
     }
 
@@ -625,6 +738,29 @@ class _DashboardPageState extends State<DashboardPage> {
                             children: documents.map((doc) {
                               final status = _effectiveStatusForDoc(doc);
 
+                              String statusLabelForList(String s) {
+                                switch (s) {
+                                  case 'draft':
+                                    return 'Draft';
+                                  case 'request_pending':
+                                    return 'Menunggu Tanda Tangan';
+                                  case 'request_approved':
+                                    return 'Request Disetujui';
+                                  case 'request_rejected':
+                                    return 'Request Ditolak';
+                                  case 'signed':
+                                    return 'Ditandatangani';
+                                  case 'valid':
+                                    return 'Valid';
+                                  case 'invalid':
+                                    return 'Tidak Valid';
+                                  case 'rejected':
+                                    return 'Ditolak';
+                                  default:
+                                    return 'Belum Diproses';
+                                }
+                              }
+
                               return Container(
                                 margin: const EdgeInsets.symmetric(
                                   vertical: 6,
@@ -664,7 +800,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                         ),
                                       ),
                                       subtitle: Text(
-                                        "Status: $status",
+                                        "Status: ${statusLabelForList(status)}",
                                         style: const TextStyle(
                                           color: Colors.black54,
                                           fontSize: 13,
@@ -675,8 +811,11 @@ class _DashboardPageState extends State<DashboardPage> {
                                         color: Colors.black45,
                                       ),
                                       onTap: () {
-                                        final normalized = status.toLowerCase();
-                                        if (normalized == 'pending') {
+                                        final eff =
+                                            status; // sudah _effectiveStatusForDoc(doc)
+
+                                        if (eff == 'draft') {
+                                          // hanya Draft yang boleh pilih Self TTD / Request
                                           showDialog(
                                             context: context,
                                             builder: (_) => DocumentDetailDialog(
@@ -686,6 +825,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                                 await Future.wait([
                                                   _fetchDocuments(),
                                                   _fetchLogs(),
+                                                  _fetchOutgoingRequests(),
                                                 ]);
                                                 _recomputeEffectiveStatuses();
                                                 if (mounted) setState(() {});
@@ -693,6 +833,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                             ),
                                           );
                                         } else {
+                                          // selain Draft, buka detail biasa
                                           _showDetailDialog(doc);
                                         }
                                       },

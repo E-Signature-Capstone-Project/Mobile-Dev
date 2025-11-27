@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'config/api_config.dart';
 
 class VerifLogPage extends StatefulWidget {
@@ -36,47 +38,67 @@ class _VerifLogPageState extends State<VerifLogPage> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString("token") ?? "";
       final userId = prefs.getInt("user_id");
+
       final res = await http.get(
         Uri.parse(logsUrl),
         headers: {"Authorization": "Bearer $token"},
       );
 
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final allLogs = (data['data'] ?? []) as List;
+        final decoded = jsonDecode(res.body);
+
+        List allLogs = [];
+        if (decoded is List) {
+          // ✅ BE baru: langsung array
+          allLogs = decoded;
+        } else if (decoded is Map && decoded['data'] is List) {
+          // 🔁 fallback kalau nanti bentuknya { data: [...] }
+          allLogs = decoded['data'] as List;
+        }
+
         if (userId != null) {
           logs = allLogs.where((log) => log['user_id'] == userId).toList();
         } else {
           logs = allLogs;
         }
+      } else {
+        logs = [];
       }
     } catch (e) {
       debugPrint('Error fetch logs: $e');
+      logs = [];
     } finally {
       if (mounted) setState(() => loading = false);
     }
   }
 
-  Color _cardColor(String status) {
+  // --- Helper warna status (buat strip & chip) ---
+
+  Color _statusColor(String status) {
     switch (status.toLowerCase()) {
       case 'valid':
-        return Colors.green.shade50;
+        return Colors.green;
       case 'invalid':
-        return Colors.red.shade50;
+        return Colors.redAccent;
       default:
-        return Colors.orange.shade50;
+        return Colors.orange;
     }
+  }
+
+  Color _statusChipBg(String status) {
+    return _statusColor(status).withOpacity(0.12);
   }
 
   Future<void> _downloadFile(String url, String title, int index) async {
     try {
       setState(() => downloading.add(index));
 
-      // ✅ 1. Minta izin penyimpanan
+      // 1. Minta izin penyimpanan
       var status = await Permission.manageExternalStorage.status;
       if (!status.isGranted) {
         status = await Permission.manageExternalStorage.request();
         if (!status.isGranted) {
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Izin penyimpanan ditolak')),
           );
@@ -84,22 +106,23 @@ class _VerifLogPageState extends State<VerifLogPage> {
         }
       }
 
-      // ✅ 2. Download file dari URL
+      // 2. Download file dari URL
       final res = await http.get(Uri.parse(url));
       if (res.statusCode != 200) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Gagal mengunduh file dari server')),
         );
         return;
       }
 
-      // ✅ 3. Pastikan folder Download tersedia
+      // 3. Pastikan folder Download tersedia
       final downloadsDir = Directory('/storage/emulated/0/Download');
       if (!downloadsDir.existsSync()) {
         downloadsDir.createSync(recursive: true);
       }
 
-      // ✅ 4. Simpan file
+      // 4. Simpan file
       final safeTitle = title.replaceAll(RegExp(r'[^a-zA-Z0-9-_]'), '_');
       final filePath =
           '${downloadsDir.path}/${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.pdf';
@@ -108,10 +131,10 @@ class _VerifLogPageState extends State<VerifLogPage> {
 
       if (!mounted) return;
 
-      // ✅ 5. Tampilkan pop-up modern & minimalis
+      // 5. Pop-up berhasil
       showGeneralDialog(
         context: context,
-        barrierDismissible: true, // bisa ditutup klik di luar
+        barrierDismissible: true,
         barrierLabel: '',
         barrierColor: Colors.black.withOpacity(0.3),
         transitionDuration: const Duration(milliseconds: 250),
@@ -179,20 +202,234 @@ class _VerifLogPageState extends State<VerifLogPage> {
         },
       );
 
-      // Auto-close popup setelah 3 detik jika user tidak menekan apa pun
+      // Auto-close popup setelah 3 detik
       Future.delayed(const Duration(seconds: 3), () {
-        if (Navigator.canPop(context)) Navigator.pop(context);
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
       });
 
       debugPrint('✅ File tersimpan: $filePath');
     } catch (e) {
       debugPrint('❌ Error download: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Gagal menyimpan file: $e')));
     } finally {
-      setState(() => downloading.remove(index));
+      if (mounted) setState(() => downloading.remove(index));
     }
+  }
+
+  // --- Card verif log
+
+  Widget _buildLogCard(Map<String, dynamic> log, int index) {
+    final status = (log['verification_result'] ?? 'unknown').toString();
+    final isValid = status.toLowerCase() == 'valid';
+    final doc = log['Document'];
+    final ts = log['timestamp'];
+    final dt = ts != null ? DateTime.tryParse(ts) : null;
+
+    final String title = doc?['title'] ?? 'Dokumen';
+    final String dateText = dt == null
+        ? 'Tanggal tidak diketahui'
+        : DateFormat('dd MMM yyyy, HH:mm', 'id_ID').format(dt);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Strip warna status di kiri
+          Container(
+            width: 6,
+            decoration: BoxDecoration(
+              color: _statusColor(status),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16),
+                bottomLeft: Radius.circular(16),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Baris atas: icon + judul + chip status
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        height: 40,
+                        width: 40,
+                        decoration: BoxDecoration(
+                          color: primaryColorUI.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          isValid
+                              ? Icons.verified_rounded
+                              : Icons.error_outline_rounded,
+                          color: isValid
+                              ? Colors.green
+                              : Colors.redAccent.shade200,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              dateText,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _statusChipBg(status),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          status.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _statusColor(status),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  // Baris bawah: info kecil + tombol unduh / status
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // kalau mau, ini bisa dihapus juga
+                      Text(
+                        'Riwayat verifikasi',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (isValid)
+                        downloading.contains(index)
+                            ? const SizedBox(
+                                height: 26,
+                                width: 26,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : ElevatedButton.icon(
+                                onPressed: () {
+                                  String? url;
+                                  if (doc != null) {
+                                    final filePath = (doc['file_path'] ?? '')
+                                        .toString();
+                                    if (filePath.isNotEmpty) {
+                                      final normalized =
+                                          filePath.startsWith('/')
+                                          ? filePath.substring(1)
+                                          : filePath;
+                                      url = '$apiBase/$normalized';
+                                    }
+                                  }
+
+                                  if (url != null && url.isNotEmpty) {
+                                    _downloadFile(
+                                      url,
+                                      doc?['title'] ?? 'file',
+                                      index,
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'URL dokumen tidak ditemukan',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: primaryColorUI,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  minimumSize: const Size(0, 0),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                icon: const Icon(
+                                  Icons.download_rounded,
+                                  size: 18,
+                                ),
+                                label: const Text(
+                                  'Unduh',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              )
+                      else
+                        Text(
+                          'Tidak Valid',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _statusColor(status),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -206,119 +443,29 @@ class _VerifLogPageState extends State<VerifLogPage> {
               color: primaryColorUI,
               backgroundColor: colorBG,
               child: logs.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'Belum ada log verifikasi',
-                        style: TextStyle(color: Colors.black54, fontSize: 15),
-                      ),
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 80),
+                        Center(
+                          child: Text(
+                            'Belum ada log verifikasi',
+                            style: TextStyle(
+                              color: Colors.black54,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                      ],
                     )
                   : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.all(16),
                       itemCount: logs.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, i) {
-                        final log = logs[i];
-                        final status = (log['verification_result'] ?? 'unknown')
-                            .toString();
-                        final isValid = status == 'valid';
-                        final doc = log['Document'];
-                        final ts = log['timestamp'];
-                        final dt = ts != null ? DateTime.tryParse(ts) : null;
-
-                        return Card(
-                          color: _cardColor(status),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 2,
-                          child: ListTile(
-                            leading: Icon(
-                              isValid ? Icons.verified : Icons.error_outline,
-                              color: isValid ? Colors.green : Colors.redAccent,
-                              size: 30,
-                            ),
-                            title: Text(
-                              doc?['title'] ?? 'Dokumen',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 15,
-                              ),
-                            ),
-                            subtitle: Text(
-                              dt == null
-                                  ? 'Tanggal tidak diketahui'
-                                  : DateFormat(
-                                      'dd MMM yyyy, HH:mm',
-                                      'id_ID',
-                                    ).format(dt),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: Colors.black54,
-                              ),
-                            ),
-
-                            // 🔽 Tambahkan icon download hanya untuk valid
-                            trailing: isValid
-                                ? (downloading.contains(i)
-                                      ? const SizedBox(
-                                          height: 24,
-                                          width: 24,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.green,
-                                          ),
-                                        )
-                                      : IconButton(
-                                          icon: const Icon(
-                                            Icons.download_rounded,
-                                            color: Colors.green,
-                                            size: 26,
-                                          ),
-                                          tooltip: 'Download dokumen',
-                                          onPressed: () {
-                                            String? url;
-                                            if (doc != null) {
-                                              final filePath =
-                                                  (doc['file_path'] ?? '')
-                                                      .toString();
-                                              if (filePath.isNotEmpty) {
-                                                final normalized =
-                                                    filePath.startsWith('/')
-                                                    ? filePath.substring(1)
-                                                    : filePath;
-                                                url =
-                                                    '$apiBase/$normalized'; // bangun URL lengkap ke backend
-                                              }
-                                            }
-
-                                            if (url != null && url.isNotEmpty) {
-                                              _downloadFile(
-                                                url,
-                                                doc?['title'] ?? 'file',
-                                                i,
-                                              );
-                                            } else {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text(
-                                                    'URL dokumen tidak ditemukan',
-                                                  ),
-                                                ),
-                                              );
-                                            }
-                                          },
-                                        ))
-                                : Text(
-                                    status.toUpperCase(),
-                                    style: TextStyle(
-                                      color: Colors.redAccent,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                          ),
-                        );
+                        final log = logs[i] as Map<String, dynamic>;
+                        return _buildLogCard(log, i);
                       },
                     ),
             ),
