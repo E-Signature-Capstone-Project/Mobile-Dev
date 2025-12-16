@@ -72,7 +72,7 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       final token = await _token() ?? "";
       final res = await http.get(
-        Uri.parse("$authUrl/me"),
+        Uri.parse("$authUrl/profile"),
         headers: {"Authorization": "Bearer $token"},
       );
 
@@ -204,7 +204,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 
-  // ✅ NEW: ambil baseline user
+  // ✅ Ambil baseline user
   Future<void> _fetchBaselines() async {
     try {
       final token = await _token() ?? "";
@@ -349,6 +349,78 @@ class _DashboardPageState extends State<DashboardPage> {
             url,
             enableTextSelection: false,
             canShowScrollStatus: true,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ====== DIALOG: tidak ada baseline → blok upload ======
+  void _showNoBaselineDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.orange.shade700,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                "Baseline Belum Ada",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Sebelum menambah dokumen, silakan tambahkan dulu tanda tangan baseline di halaman Profil.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: Colors.black87,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColorUI,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  child: const Text(
+                    "Mengerti",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -601,7 +673,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                   children: [
                     Text(
-                      "Hi, ${userName ?? 'User'}!",
+                      "Hi, ${userName ?? 'User'}!👋",
                       style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
@@ -694,8 +766,15 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                     const SizedBox(height: 30),
 
+                    // 🔹 Upload dokumen → blok kalau belum ada baseline
                     ElevatedButton.icon(
-                      onPressed: _pickAndUploadPdf,
+                      onPressed: () async {
+                        if (baselines.isEmpty) {
+                          _showNoBaselineDialog();
+                          return;
+                        }
+                        await _pickAndUploadPdf();
+                      },
                       icon: const Icon(Icons.upload_file, color: Colors.white),
                       label: const Text(
                         "Upload Dokumen",
@@ -811,8 +890,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                         color: Colors.black45,
                                       ),
                                       onTap: () {
-                                        final eff =
-                                            status; // sudah _effectiveStatusForDoc(doc)
+                                        final eff = status;
 
                                         if (eff == 'draft') {
                                           // hanya Draft yang boleh pilih Self TTD / Request

@@ -20,7 +20,7 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
   final Color primaryColorUI = const Color(0xFF003E9C);
   final Color bgColor = const Color(0xFFF4FAFE);
 
-  String get logsUrl => ApiConfig.logsUrl; // -> /logs
+  String get logsUrl => ApiConfig.logsUrl;
 
   bool loading = true;
   List _allLogs = [];
@@ -28,6 +28,10 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
 
   String _searchText = '';
   String _statusFilter = 'all'; // all / valid / invalid
+
+  // ===== profile admin (bottom sheet) =====
+  Map<String, dynamic>? _profile;
+  bool _loadingProfile = false;
 
   @override
   void initState() {
@@ -41,7 +45,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token') ?? '';
 
-      // admin endpoint -> /logs/all
       final res = await http.get(
         Uri.parse('$logsUrl/all'),
         headers: {'Authorization': 'Bearer $token'},
@@ -73,7 +76,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
   void _applyFilter() {
     List logs = List.from(_allLogs);
 
-    // filter status
     if (_statusFilter != 'all') {
       logs = logs
           .where(
@@ -84,7 +86,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
           .toList();
     }
 
-    // filter search
     final q = _searchText.trim().toLowerCase();
     if (q.isNotEmpty) {
       logs = logs.where((e) {
@@ -181,7 +182,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
     );
   }
 
-  // ✅ filter chip pakai PopupMenu biar teks 100% center
   Widget _buildStatusFilterChip() {
     String label;
     switch (_statusFilter) {
@@ -221,7 +221,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Center(
               child: Text(
@@ -245,112 +244,180 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
     );
   }
 
-  // 🔹 Popup logout khusus admin panel
-  void _showLogoutDialog() {
-    final rootContext = context;
+  // ================= PROFIL ADMIN (BOTTOM SHEET) =================
 
-    showDialog(
-      context: rootContext,
-      barrierDismissible: true,
-      builder: (dialogCtx) {
-        return Dialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
+  Future<void> _fetchProfile() async {
+    setState(() => _loadingProfile = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token') ?? '';
+
+      final res = await http.get(
+        Uri.parse('${ApiConfig.authUrl}/profile'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map<String, dynamic>) {
+          _profile = decoded;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetch profile admin: $e');
+    } finally {
+      if (mounted) setState(() => _loadingProfile = false);
+    }
+  }
+
+  Future<void> _openProfileSheet() async {
+    if (_profile == null && !_loadingProfile) {
+      await _fetchProfile();
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) {
+        final name = _profile?['name']?.toString() ?? '-';
+        final email = _profile?['email']?.toString() ?? '-';
+        final role = _profile?['role']?.toString() ?? 'admin';
+
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            top: 12,
           ),
-          child: Container(
-            padding: const EdgeInsets.all(25),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.red.withOpacity(0.1),
-                  blurRadius: 25,
-                  offset: const Offset(0, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
                 ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.logout_rounded, color: primaryColorUI, size: 55),
-                const SizedBox(height: 20),
-                const Text(
-                  "Logout Admin",
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20,
-                    color: Colors.black,
+              ),
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 26,
+                    backgroundColor: primaryColorUI.withOpacity(0.1),
+                    child: Icon(
+                      Icons.admin_panel_settings_outlined,
+                      color: primaryColorUI,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  "Apakah kamu yakin ingin keluar dari panel admin?",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black54,
-                    fontSize: 14,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _loadingProfile
+                        ? const Align(
+                            alignment: Alignment.centerLeft,
+                            child: SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                email,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
                   ),
-                ),
-                const SizedBox(height: 25),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          side: BorderSide(
-                            color: Colors.black.withOpacity(0.2),
-                          ),
-                        ),
-                        onPressed: () => Navigator.pop(dialogCtx),
-                        child: const Text(
-                          "Batal",
-                          style: TextStyle(
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w600,
-                          ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: primaryColorUI.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.verified_user,
+                        size: 14,
+                        color: Colors.black54,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        role.toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryColorUI,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 0,
-                        ),
-                        onPressed: () async {
-                          Navigator.pop(dialogCtx); // tutup dialog dulu
-                          await performLogout(rootContext); // pakai helper
-                        },
-                        child: const Text(
-                          "Logout",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(context); // tutup sheet
+                    await performLogout(context); // helper existing
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                  label: const Text(
+                    "Logout",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
     );
   }
+
+  // ================= BUILD =================
 
   @override
   Widget build(BuildContext context) {
@@ -359,12 +426,11 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
       body: SafeArea(
         child: Column(
           children: [
-            // ===== CUSTOM APP BAR ADMIN =====
+            // ===== HEADER =====
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               child: Row(
                 children: [
-                  // logo + title
                   Row(
                     children: [
                       Container(
@@ -404,11 +470,14 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
                     ],
                   ),
                   const Spacer(),
-                  // tombol logout
                   IconButton(
-                    tooltip: 'Logout',
-                    onPressed: _showLogoutDialog,
-                    icon: Icon(Icons.logout_rounded, color: primaryColorUI),
+                    tooltip: 'Profil',
+                    onPressed: _openProfileSheet,
+                    iconSize: 32,
+                    icon: Icon(
+                      Icons.account_circle_outlined,
+                      color: primaryColorUI,
+                    ),
                   ),
                 ],
               ),
@@ -475,7 +544,6 @@ class _AdminVerifLogPageState extends State<AdminVerifLogPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // top row: dok + status
                                   Row(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,

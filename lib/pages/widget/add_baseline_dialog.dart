@@ -1,7 +1,7 @@
+// lib/pages/widget/add_baseline_dialog.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:signature/signature.dart';
 
 class AddBaselineDialog extends StatefulWidget {
   final Color primaryColor;
@@ -18,14 +18,7 @@ class AddBaselineDialog extends StatefulWidget {
 }
 
 class _AddBaselineDialogState extends State<AddBaselineDialog> {
-  final SignatureController _controller = SignatureController(
-    penStrokeWidth: 2,
-    penColor: Colors.black,
-    exportBackgroundColor: Colors.white,
-  );
-
   File? uploadedImage;
-  bool isDrawing = true;
   bool isSubmitting = false;
 
   Future<void> _pickImage() async {
@@ -34,37 +27,25 @@ class _AddBaselineDialogState extends State<AddBaselineDialog> {
     if (picked != null) {
       setState(() {
         uploadedImage = File(picked.path);
-        isDrawing = false;
       });
     }
   }
 
   Future<void> _submit() async {
+    if (uploadedImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Silakan pilih gambar tanda tangan')),
+      );
+      return;
+    }
+
     if (isSubmitting) return;
     setState(() => isSubmitting = true);
 
     try {
-      File? sigFile;
-      if (isDrawing) {
-        final bytes = await _controller.toPngBytes();
-        if (bytes == null || bytes.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Tanda tangan belum digambar')),
-          );
-          setState(() => isSubmitting = false);
-          return;
-        }
-        final file = File(
-          '${Directory.systemTemp.path}/baseline_${DateTime.now().millisecondsSinceEpoch}.png',
-        );
-        await file.writeAsBytes(bytes);
-        sigFile = file;
-      } else {
-        sigFile = uploadedImage;
-      }
-
-      if (sigFile == null) return;
-      await widget.onSubmit(sigFile);
+      await widget.onSubmit(uploadedImage!);
+    } catch (e) {
+      // Handle error di parent, atau tampilkan snackbar di sini jika perlu
     } finally {
       if (mounted) setState(() => isSubmitting = false);
     }
@@ -81,111 +62,99 @@ class _AddBaselineDialogState extends State<AddBaselineDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                "Tambah Baseline Signature",
+                "Upload Baseline Signature",
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
               ),
               const SizedBox(height: 15),
 
-              // area gambar / upload
+              // Preview Image Container
               Container(
-                height: 200,
+                height: 180,
+                width: double.infinity,
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.black26),
+                  color: Colors.grey.shade50,
+                  border: Border.all(color: Colors.grey.shade300),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: isDrawing
-                    ? Signature(
-                        controller: _controller,
-                        backgroundColor: Colors.white,
+                child: uploadedImage != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(uploadedImage!, fit: BoxFit.contain),
                       )
-                    : (uploadedImage != null
-                          ? Image.file(uploadedImage!, fit: BoxFit.contain)
-                          : const Center(child: Text("Belum ada gambar"))),
+                    : Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.image_outlined,
+                            size: 48,
+                            color: Colors.grey.shade400,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            "Belum ada gambar",
+                            style: TextStyle(color: Colors.grey.shade500),
+                          ),
+                        ],
+                      ),
               ),
 
-              if (isDrawing) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: _controller.clear,
-                    icon: Icon(
-                      Icons.refresh_rounded,
-                      color: widget.primaryColor,
-                      size: 20,
-                    ),
-                    label: Text(
-                      "Reset",
-                      style: TextStyle(
-                        color: widget.primaryColor,
-                        fontWeight: FontWeight.w500,
-                      ),
+              const SizedBox(height: 15),
+
+              // Tombol Pilih Gambar
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _pickImage,
+                  icon: Icon(Icons.upload_file, color: widget.primaryColor),
+                  label: Text(
+                    uploadedImage == null ? "Pilih Gambar" : "Ganti Gambar",
+                    style: TextStyle(color: widget.primaryColor),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    side: BorderSide(color: widget.primaryColor),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
                     ),
                   ),
                 ),
-              ],
-
-              const SizedBox(height: 10),
-
-              // tombol gambar / upload
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => setState(() => isDrawing = true),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: widget.primaryColor),
-                      ),
-                      child: Text(
-                        "Gambar",
-                        style: TextStyle(color: widget.primaryColor),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _pickImage,
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: widget.primaryColor),
-                      ),
-                      child: Text(
-                        "Upload",
-                        style: TextStyle(color: widget.primaryColor),
-                      ),
-                    ),
-                  ),
-                ],
               ),
 
-              const SizedBox(height: 18),
+              const SizedBox(height: 20),
 
-              // tombol simpan
-              ElevatedButton(
-                onPressed: isSubmitting ? null : _submit,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: widget.primaryColor,
-                  minimumSize: const Size(double.infinity, 45),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
+              // Tombol Simpan
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: (uploadedImage == null || isSubmitting)
+                      ? null
+                      : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: widget.primaryColor,
+                    minimumSize: const Size(double.infinity, 45),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
-                ),
-                child: isSubmitting
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          "Simpan Baseline",
+                          style: TextStyle(color: Colors.white),
                         ),
-                      )
-                    : const Text(
-                        "Simpan Baseline",
-                        style: TextStyle(color: Colors.white),
-                      ),
+                ),
               ),
 
               const SizedBox(height: 10),
+
+              // Tombol Batal
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: const Text(

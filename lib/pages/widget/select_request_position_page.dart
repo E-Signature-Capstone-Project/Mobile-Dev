@@ -1,53 +1,50 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
-import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../config/api_config.dart';
 
-class SelectPdfPositionPage extends StatefulWidget {
-  final int documentId;
+// Model untuk mengembalikan hasil posisi ke halaman sebelumnya
+class SignaturePositionResult {
+  final int pageNumber;
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+
+  SignaturePositionResult({
+    required this.pageNumber,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+}
+
+class SelectRequestPositionPage extends StatefulWidget {
   final String pdfUrl;
   final Color primaryColor;
-  final File signatureFile;
 
-  const SelectPdfPositionPage({
+  const SelectRequestPositionPage({
     super.key,
-    required this.documentId,
     required this.pdfUrl,
     required this.primaryColor,
-    required this.signatureFile,
   });
 
   @override
-  State<SelectPdfPositionPage> createState() => _SelectPdfPositionPageState();
+  State<SelectRequestPositionPage> createState() =>
+      _SelectRequestPositionPageState();
 }
 
-class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
-  late String signEndpoint;
-  final String apiBase = ApiConfig.baseUrl;
-  String get documentsUrl => ApiConfig.documentsUrl;
-
-  Offset? _relPos; // Posisi relatif (0.0 - 1.0) dari titik tengah kotak
-  bool isSubmitting = false;
-  int currentPage = 1;
-
+class _SelectRequestPositionPageState extends State<SelectRequestPositionPage> {
   final PdfViewerController _pdfController = PdfViewerController();
   final GlobalKey _pdfKey = GlobalKey();
   final Map<int, Size> _pageSizesPt = {};
 
-  // Ukuran dasar QR (Point PDF)
+  int _currentPage = 1;
+  Offset? _relPos; // Posisi relatif (0.0 - 1.0)
+
+  // Ukuran dasar QR (Point)
   static const double baseSigWidthPt = 100.0;
   double scale = 1.0;
-  double imageAspectRatio = 1.0; // QR Code pasti persegi
-
-  @override
-  void initState() {
-    super.initState();
-    signEndpoint = '$documentsUrl/${widget.documentId}/sign';
-  }
+  double imageAspectRatio = 1.0; // QR Code persegi
 
   // --- LOGIKA RENDER TAMPILAN ---
   _PageDisplayRect _computeDisplayRect(
@@ -85,7 +82,7 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
     if (renderBox == null) return;
 
     final viewerSize = renderBox.size;
-    final pagePts = _pageSizesPt[currentPage] ?? const Size(595, 842);
+    final pagePts = _pageSizesPt[_currentPage] ?? const Size(595, 842);
 
     final rect = _computeDisplayRect(
       viewerSize,
@@ -105,106 +102,50 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
     setState(() => _relPos = Offset(relX, relY));
   }
 
-  // --- LOGIKA UTAMA: POSISIKAN QR BUKAN TTD ---
-  Future<void> _submit() async {
+  // --- LOGIKA SUBMIT DENGAN KOMPENSASI ---
+  void _submit() {
     if (_relPos == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Silakan klik posisi QR di PDF.")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Ketuk layar PDF dulu.")));
       return;
     }
 
-    setState(() => isSubmitting = true);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token') ?? '';
+    // 1. Ambil ukuran halaman asli
+    final pagePt = _pageSizesPt[_currentPage] ?? const Size(595, 842);
 
-      // 1. Ambil ukuran halaman asli (Point)
-      final pagePt = _pageSizesPt[currentPage] ?? const Size(595, 842);
+    // 2. Hitung Ukuran QR
+    final sigWidthPt = baseSigWidthPt * scale;
+    final sigHeightPt = sigWidthPt; // Persegi
 
-      // 2. Hitung Ukuran QR di PDF (Point)
-      final sigWidthPt = baseSigWidthPt * scale;
-      final sigHeightPt = sigWidthPt; // Persegi 1:1
+    // 3. Hitung Titik Tengah Kotak (Pilihan User)
+    final centerX = _relPos!.dx * pagePt.width;
+    final centerY_FromTop = _relPos!.dy * pagePt.height;
 
-      // 3. Hitung Titik Tengah Kotak (Pilihan User)
-      final centerX = _relPos!.dx * pagePt.width;
-      final centerY_FromTop = _relPos!.dy * pagePt.height;
+    // 4. Hitung Sisi Kiri Kotak (Visual Left)
+    // Ini batas kiri dimana user MELIHAT kotak
+    final visualLeft = centerX - (sigWidthPt / 2);
 
-      // 4. Hitung Sisi Kiri Kotak (Visual Left)
-      // Ini adalah batas kiri dimana User INGIN QR muncul
-      final visualLeft = centerX - (sigWidthPt / 2);
+    // --- RUMUS 'HANTU' UNTUK BACKEND ---
+    // Backend: QR_X = Sent_X + Width + 8
+    // Kita mau: QR_X == visualLeft
+    // Maka: Sent_X = visualLeft - Width - 8
 
-      // --- RUMUS 'HANTU' UNTUK BACKEND ---
-      // Backend Logic: QR_X = Sent_X + Width + 8
-      // Kita mau: QR_X == visualLeft
-      // Maka: Sent_X = visualLeft - Width - 8
+    final finalX = visualLeft - sigWidthPt - 8;
 
-      final pdfX = visualLeft - sigWidthPt - 8;
+    // --- HITUNG Y (FLIP COORDINATE) ---
+    // Y_Bawah = TinggiHalaman - Y_Pusat - SetengahTinggi
+    final finalY = pagePt.height - centerY_FromTop - (sigHeightPt / 2);
 
-      // --- HITUNG Y (FLIP COORDINATE) ---
-      // Backend pakai pdf-lib (0,0 di Kiri-Bawah)
-      // Kita hitung posisi bawah kotak user
-      // Y_Bawah = TinggiHalaman - Y_Pusat - SetengahTinggi
-
-      final pdfY = pagePt.height - centerY_FromTop - (sigHeightPt / 2);
-
-      debugPrint("SUBMIT LOGIC:");
-      debugPrint("User pilih Center X: $centerX");
-      debugPrint("User mau QR mulai di (Visual Left): $visualLeft");
-      debugPrint("Kita kirim ke Backend (X): $pdfX");
-      debugPrint("Harapan: $pdfX + $sigWidthPt + 8 = $visualLeft");
-
-      final req = http.MultipartRequest('POST', Uri.parse(signEndpoint))
-        ..headers['Authorization'] = 'Bearer $token'
-        ..fields['pageNumber'] = currentPage.toString()
-        ..fields['x'] = pdfX.toStringAsFixed(2)
-        ..fields['y'] = pdfY.toStringAsFixed(2)
-        ..fields['width'] = sigWidthPt.toStringAsFixed(0)
-        ..fields['height'] = sigHeightPt.toStringAsFixed(0)
-        ..files.add(
-          await http.MultipartFile.fromPath(
-            'signatureImage',
-            widget.signatureFile.path,
-            contentType: MediaType('image', 'png'),
-          ),
-        );
-
-      final res = await req.send();
-      final body = await res.stream.bytesToString();
-      final success = res.statusCode == 200;
-
-      if (success) {
-        _showResult(true);
-      } else {
-        debugPrint('❌ Error BE: $body');
-        _showResult(false);
-      }
-    } catch (e) {
-      debugPrint('❌ Submit error: $e');
-      _showResult(false);
-    } finally {
-      if (mounted) setState(() => isSubmitting = false);
-    }
-  }
-
-  void _showResult(bool success) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Text(success ? "Sukses" : "Gagal"),
-        content: Text(
-          success ? "Dokumen berhasil ditandatangani." : "Gagal memproses.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              if (success) Navigator.popUntil(context, (r) => r.isFirst);
-            },
-            child: Text("OK", style: TextStyle(color: widget.primaryColor)),
-          ),
-        ],
+    // Kembalikan hasil ke Request Page
+    Navigator.pop(
+      context,
+      SignaturePositionResult(
+        pageNumber: _currentPage,
+        x: double.parse(finalX.toStringAsFixed(2)),
+        y: double.parse(finalY.toStringAsFixed(2)),
+        width: double.parse(sigWidthPt.toStringAsFixed(0)),
+        height: double.parse(sigHeightPt.toStringAsFixed(0)),
       ),
     );
   }
@@ -242,11 +183,11 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
                 setState(() {});
               },
               onPageChanged: (d) =>
-                  setState(() => currentPage = d.newPageNumber),
+                  setState(() => _currentPage = d.newPageNumber),
             ),
           ),
 
-          // === OVERLAY KOTAK (VISUALISASI QR) ===
+          // === OVERLAY KOTAK QR ===
           if (_relPos != null)
             AnimatedBuilder(
               animation: _pdfController,
@@ -259,7 +200,7 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
                 final zoom = _pdfController.zoomLevel;
                 final scroll = _pdfController.scrollOffset;
                 final pagePts =
-                    _pageSizesPt[currentPage] ?? const Size(595, 842);
+                    _pageSizesPt[_currentPage] ?? const Size(595, 842);
 
                 final rect = _computeDisplayRect(viewerSize, pagePts, zoom);
                 final scaleFactor = rect.widthPx / pagePts.width;
@@ -278,7 +219,6 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
                   top: centerY - sigH_Px / 2,
                   child: GestureDetector(
                     onPanUpdate: (d) {
-                      // Geser kotak (Update _relPos)
                       final dxRel = d.delta.dx / rect.widthPx;
                       final dyRel = d.delta.dy / rect.heightPx;
                       setState(() {
@@ -297,7 +237,7 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
                           width: 2,
                         ),
                         color: widget.primaryColor.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Stack(
                         children: [
@@ -347,24 +287,18 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
             boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black12)],
           ),
           child: ElevatedButton(
-            onPressed: isSubmitting || _relPos == null ? null : _submit,
+            onPressed: _relPos == null ? null : _submit,
             style: ElevatedButton.styleFrom(
               backgroundColor: widget.primaryColor,
               padding: const EdgeInsets.symmetric(vertical: 12),
             ),
-            child: isSubmitting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(color: Colors.white),
-                  )
-                : const Text(
-                    "SIMPAN POSISI",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+            child: const Text(
+              "SIMPAN POSISI",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ),
       ),
@@ -372,7 +306,6 @@ class _SelectPdfPositionPageState extends State<SelectPdfPositionPage> {
   }
 }
 
-// Helper Class Wajib
 class _PageDisplayRect {
   final double widthPx;
   final double heightPx;

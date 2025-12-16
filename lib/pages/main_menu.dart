@@ -51,25 +51,21 @@ class _MainMenuState extends State<MainMenu> {
     return prefs.getString("token");
   }
 
-  DateTime _parseDate(dynamic v) {
-    if (v == null) {
-      return DateTime.fromMillisecondsSinceEpoch(0);
-    }
-    final parsed = DateTime.tryParse(v.toString());
-    return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
+  String _buildNotifKeyFromRaw(Map<String, dynamic> raw) {
+    final id = (raw['request_id'] ?? '').toString();
+    final status = (raw['status'] ?? '').toString();
+    return '${id}_$status';
   }
 
   /// Cek apakah ada notif (request) yang belum dibaca berdasarkan read_notification_ids
+  // Ganti fungsi ini di main_menu.dart
   Future<void> _checkNotificationsForBadge() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = await _token() ?? '';
-      final savedRead = prefs.getStringList('read_notification_ids') ?? [];
-      final readIds = savedRead
-          .map((e) => int.tryParse(e))
-          .where((e) => e != null)
-          .cast<int>()
-          .toSet();
+
+      final savedKeys = prefs.getStringList('read_notification_keys') ?? [];
+      final readKeys = savedKeys.toSet();
 
       final incomingRes = await http.get(
         Uri.parse('$requestsUrl/incoming'),
@@ -84,45 +80,53 @@ class _MainMenuState extends State<MainMenu> {
       List outgoing = [];
 
       if (incomingRes.statusCode == 200) {
-        final decoded = jsonDecode(incomingRes.body);
-        if (decoded is Map && decoded['success'] == true) {
-          incoming = (decoded['data'] ?? []) as List;
-        }
+        final d = jsonDecode(incomingRes.body);
+        incoming = (d['data'] ?? []) as List;
       }
 
       if (outgoingRes.statusCode == 200) {
-        final decoded = jsonDecode(outgoingRes.body);
-        if (decoded is Map && decoded['success'] == true) {
-          outgoing = (decoded['data'] ?? []) as List;
-        }
+        final d = jsonDecode(outgoingRes.body);
+        final rawOutgoing = (d['data'] ?? []) as List;
+
+        // ✅ FILTER PENTING: Hapus Self Sign dari perhitungan Badge
+        outgoing = rawOutgoing.where((item) {
+          final reqId = item['requester_id'].toString();
+          final sigId = item['signer_id'].toString();
+          final note = (item['note'] ?? '').toString().toLowerCase();
+
+          if (reqId == sigId) return false; // Skip Self Sign
+          if (note.contains("self signed")) return false; // Skip Note Self Sign
+
+          return true;
+        }).toList();
       }
 
       bool hasUnread = false;
 
-      // incoming request → semua dianggap notif
+      // Cek Incoming
       for (final r in incoming) {
-        final item = r as Map<String, dynamic>;
-        final int? reqId = item['request_id'] is int
-            ? item['request_id'] as int
-            : int.tryParse((item['request_id'] ?? '').toString());
-        if (reqId == null) continue;
-        if (!readIds.contains(reqId)) {
+        final raw = r as Map<String, dynamic>;
+        // Filter incoming self sign juga (jaga-jaga)
+        if (raw['requester_id'].toString() == raw['signer_id'].toString())
+          continue;
+
+        final key = _buildNotifKeyFromRaw(raw);
+        if (!readKeys.contains(key)) {
           hasUnread = true;
           break;
         }
       }
 
-      // kalau belum ketemu unread di incoming, cek outgoing approved/rejected
+      // Cek Outgoing (Hanya yang statusnya bukan pending)
       if (!hasUnread) {
         for (final r in outgoing) {
-          final item = r as Map<String, dynamic>;
-          final status = (item['status'] ?? 'pending').toString().toLowerCase();
+          final raw = r as Map<String, dynamic>;
+          final status = (raw['status'] ?? 'pending').toString().toLowerCase();
+
           if (status == 'pending') continue;
-          final int? reqId = item['request_id'] is int
-              ? item['request_id'] as int
-              : int.tryParse((item['request_id'] ?? '').toString());
-          if (reqId == null) continue;
-          if (!readIds.contains(reqId)) {
+
+          final key = _buildNotifKeyFromRaw(raw);
+          if (!readKeys.contains(key)) {
             hasUnread = true;
             break;
           }
@@ -164,7 +168,7 @@ class _MainMenuState extends State<MainMenu> {
         leading: Padding(
           padding: const EdgeInsets.only(left: 12),
           child: Image.asset(
-            'assets/logobiru.png',
+            'assets/logo.png',
             height: 28,
             fit: BoxFit.contain,
           ),

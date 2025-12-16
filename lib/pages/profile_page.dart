@@ -25,6 +25,7 @@ class _ProfilePageState extends State<ProfilePage> {
   bool isLoading = true;
   String? email;
   String? name;
+  String? role;
 
   // list baseline dari backend
   List<Map<String, dynamic>> baselines = [];
@@ -33,10 +34,19 @@ class _ProfilePageState extends State<ProfilePage> {
   final Color primaryColorUI = const Color(0xFF003E9C);
   final Color colorBG = const Color(0xFFF4FAFE);
 
+  bool _updatingName = false;
+  final TextEditingController _nameEditController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _fetchProfileAndBaselines();
+  }
+
+  @override
+  void dispose() {
+    _nameEditController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchProfileAndBaselines() async {
@@ -50,19 +60,28 @@ class _ProfilePageState extends State<ProfilePage> {
 
       // profile
       final resMe = await http.get(
-        Uri.parse("$authUrl/me"),
+        Uri.parse("$authUrl/profile"), // ⬅️ FIX: pakai /profile
         headers: {"Authorization": "Bearer $token"},
       );
 
       if (resMe.statusCode == 200) {
         final data = jsonDecode(resMe.body);
+        final fetchedEmail = (data["email"] ?? '').toString();
+        final fetchedName = (data["name"] ?? '').toString();
+        final fetchedRole = (data["role"] ?? 'user').toString();
+
         setState(() {
-          email = data["email"];
-          name = data["name"];
+          email = fetchedEmail;
+          name = fetchedName.isEmpty ? '-' : fetchedName;
+          role = fetchedRole;
         });
-        await prefs.setString('user_email', data["email"] ?? '');
-        await prefs.setString('user_name', data["name"] ?? '');
-        await prefs.setString('current_email', data["email"] ?? '');
+
+        _nameEditController.text = fetchedName;
+
+        await prefs.setString('user_email', fetchedEmail);
+        await prefs.setString('user_name', fetchedName);
+        await prefs.setString('current_email', fetchedEmail);
+        await prefs.setString('role', fetchedRole);
       }
 
       // baselines
@@ -73,7 +92,9 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (resBase.statusCode == 200) {
         final data = jsonDecode(resBase.body);
-        final list = List<Map<String, dynamic>>.from(data['baselines'] as List);
+        final list = List<Map<String, dynamic>>.from(
+          (data['baselines'] ?? []) as List,
+        );
         setState(() {
           baselines = list;
         });
@@ -84,6 +105,193 @@ class _ProfilePageState extends State<ProfilePage> {
       debugPrint("Error fetching profile/baselines: $e");
       setState(() => isLoading = false);
     }
+  }
+
+  // ====== UPDATE NAME ke backend ======
+  Future<void> _updateName(String newName) async {
+    newName = newName.trim();
+    if (newName.length < 3) {
+      _showErrorDialog("Nama harus minimal 3 karakter.");
+      return;
+    }
+
+    try {
+      setState(() {
+        _updatingName = true;
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token') ?? '';
+      if (token.isEmpty) {
+        _showErrorDialog("Token tidak ditemukan. Silakan login ulang.");
+        return;
+      }
+
+      final res = await http.put(
+        Uri.parse('$authUrl/name'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'name': newName}),
+      );
+
+      final body = jsonDecode(res.body);
+
+      if (res.statusCode == 200) {
+        await prefs.setString('user_name', newName);
+        setState(() {
+          name = newName;
+        });
+        Navigator.of(context).pop(); // tutup sheet/dialog
+        _showSuccessDialog('Nama berhasil diperbarui.');
+      } else {
+        final msg =
+            body['error']?.toString() ??
+            body['message']?.toString() ??
+            'Gagal memperbarui nama.';
+        _showErrorDialog(msg);
+      }
+    } catch (e) {
+      _showErrorDialog('Gagal terhubung ke server: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingName = false;
+        });
+      }
+    }
+  }
+
+  // ====== BOTTOM SHEET: Edit Nama ======
+  void _showEditNameSheet() {
+    _nameEditController.text = name ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        final bottomInset = MediaQuery.of(ctx).viewInsets.bottom;
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 16,
+            bottom: bottomInset + 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                "Ubah Nama",
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Perbarui nama yang akan ditampilkan di aplikasi.",
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _nameEditController,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: 'Nama Lengkap',
+                  isDense: true,
+                  filled: true,
+                  fillColor: const Color(0xFFF8F8F8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: Colors.black.withOpacity(0.15),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _updatingName
+                          ? null
+                          : () => Navigator.pop(ctx),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        "Batal",
+                        style: TextStyle(
+                          color: Colors.black87,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: _updatingName
+                          ? null
+                          : () => _updateName(_nameEditController.text),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primaryColorUI,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: _updatingName
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              "Simpan",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // pop up logout
@@ -200,35 +408,56 @@ class _ProfilePageState extends State<ProfilePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token') ?? '';
-      if (token.isEmpty) return;
+      if (token.isEmpty) {
+        _showErrorDialog("Token tidak ditemukan. Silakan login ulang.");
+        return;
+      }
 
-      final endpoint = replaceBaselineId != null
-          ? '$baselineUrl/update/$replaceBaselineId'
-          : '$baselineUrl/add';
+      final bool isReplace = replaceBaselineId != null;
 
-      final req = http.MultipartRequest('POST', Uri.parse(endpoint));
+      final uri = isReplace
+          ? Uri.parse('$baselineUrl/$replaceBaselineId')
+          : Uri.parse('$baselineUrl/add');
 
-      req.headers['Authorization'] = 'Bearer $token';
-      req.files.add(
-        await http.MultipartFile.fromPath(
-          'image',
-          file.path,
-          contentType: MediaType('image', 'png'),
-        ),
-      );
+      final method = isReplace ? 'PUT' : 'POST';
+      final req = http.MultipartRequest(method, uri)
+        ..headers['Authorization'] = 'Bearer $token'
+        ..files.add(
+          await http.MultipartFile.fromPath(
+            'image',
+            file.path,
+            contentType: MediaType('image', 'png'),
+          ),
+        );
 
       final resp = await req.send();
       final body = await resp.stream.bytesToString();
-      final json = jsonDecode(body);
 
-      if (resp.statusCode == 201) {
+      debugPrint('🔹 baseline upload status: ${resp.statusCode}');
+      debugPrint('🔹 body: $body');
+
+      Map<String, dynamic>? json;
+      try {
+        json = jsonDecode(body) as Map<String, dynamic>;
+      } catch (_) {}
+
+      if (!isReplace && resp.statusCode == 201) {
+        // tambah baseline baru
         _showSuccessDialog('Baseline berhasil ditambahkan!');
         await _fetchProfileAndBaselines();
+      } else if (isReplace && resp.statusCode == 200) {
+        // update baseline (kalau nanti fitur replace dipakai)
+        _showSuccessDialog('Baseline berhasil diperbarui!');
+        await _fetchProfileAndBaselines();
       } else {
-        final errorMsg = json['error'] ?? 'Gagal menambahkan baseline';
+        final errorMsg =
+            json?['error']?.toString() ??
+            json?['message']?.toString() ??
+            'Gagal menambahkan baseline.';
         _showErrorDialog(errorMsg);
       }
     } catch (e) {
+      debugPrint('❌ Gagal upload baseline: $e');
       _toast('Gagal mengunggah baseline: $e');
     }
   }
@@ -404,6 +633,17 @@ class _ProfilePageState extends State<ProfilePage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  String _roleLabel(String? r) {
+    switch ((r ?? '').toLowerCase()) {
+      case 'admin':
+        return 'Admin';
+      case 'admin_request':
+        return 'Calon Admin';
+      default:
+        return 'User';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -470,6 +710,7 @@ class _ProfilePageState extends State<ProfilePage> {
                         color: Colors.black,
                       ),
                     ),
+                    const SizedBox(height: 4),
                     Text(
                       email ?? "-",
                       style: const TextStyle(
@@ -477,6 +718,78 @@ class _ProfilePageState extends State<ProfilePage> {
                         color: Colors.black54,
                       ),
                     ),
+                    const SizedBox(height: 8),
+
+                    // Role chip
+                    if (role != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: primaryColorUI.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: primaryColorUI.withOpacity(0.4),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.verified_user,
+                              size: 16,
+                              color: primaryColorUI,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _roleLabel(role),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: primaryColorUI,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 16),
+
+                    // Tombol edit nama
+                    Align(
+                      alignment: Alignment.center,
+                      child: OutlinedButton.icon(
+                        onPressed: _showEditNameSheet,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          side: BorderSide(
+                            color: Colors.black.withOpacity(0.3),
+                          ),
+                        ),
+                        icon: Icon(
+                          Icons.edit_outlined,
+                          size: 18,
+                          color: primaryColorUI,
+                        ),
+                        label: const Text(
+                          "Ubah Nama",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ),
+
                     const SizedBox(height: 16),
 
                     // Logout button

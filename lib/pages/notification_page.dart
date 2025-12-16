@@ -15,57 +15,46 @@ class NotificationPage extends StatefulWidget {
 }
 
 class _NotificationPageState extends State<NotificationPage> {
-  final String apiBase = ApiConfig.baseUrl;
+  // Config
   String get requestsUrl => ApiConfig.requestsUrl;
-
   final Color primaryColorUI = const Color(0xFF003E9C);
   final Color colorBG = const Color(0xFFF4FAFE);
 
   bool _loading = true;
   List<Map<String, dynamic>> _notifications = [];
-
-  /// request_id yang SUDAH dibaca (detailnya pernah dibuka)
-  final Set<int> _readRequestIds = {};
+  final Set<String> _readKeys = {};
 
   @override
   void initState() {
     super.initState();
-    _loadReadIds();
+    _loadReadKeys();
     _fetchNotifications();
   }
 
-  Future<void> _loadReadIds() async {
+  // Helper Key Unik Notif
+  String _buildNotifKey(Map<String, dynamic> raw) {
+    final id = (raw['request_id'] ?? '').toString();
+    final status = (raw['status'] ?? '').toString();
+    return '${id}_$status';
+  }
+
+  Future<void> _loadReadKeys() async {
     final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getStringList('read_notification_ids') ?? [];
-    _readRequestIds
+    final saved = prefs.getStringList('read_notification_keys') ?? [];
+    _readKeys
       ..clear()
-      ..addAll(
-        saved.map((e) => int.tryParse(e)).where((e) => e != null).cast<int>(),
-      );
+      ..addAll(saved);
   }
 
-  Future<String?> _token() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
-  }
-
-  DateTime _parseDate(dynamic v) {
-    if (v == null) {
-      return DateTime.fromMillisecondsSinceEpoch(0);
-    }
-    final parsed = DateTime.tryParse(v.toString());
-    return parsed ?? DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  String _formatDate(dynamic v) {
-    final dt = _parseDate(v);
-    return DateFormat('dd MMM yyyy, HH:mm', 'id_ID').format(dt);
-  }
-
+  // --- FETCH DATA ---
   Future<void> _fetchNotifications() async {
     setState(() => _loading = true);
     try {
-      final token = await _token() ?? '';
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('token') ?? '';
+
+      // Ambil User ID Login untuk filter
+      final currentUserId = prefs.getInt('user_id');
 
       final incomingRes = await http.get(
         Uri.parse('$requestsUrl/incoming'),
@@ -80,24 +69,25 @@ class _NotificationPageState extends State<NotificationPage> {
       List outgoing = [];
 
       if (incomingRes.statusCode == 200) {
-        final decoded = jsonDecode(incomingRes.body);
-        if (decoded is Map && decoded['success'] == true) {
-          incoming = (decoded['data'] ?? []) as List;
-        }
+        final d = jsonDecode(incomingRes.body);
+        incoming = (d['data'] ?? []) as List;
       }
-
       if (outgoingRes.statusCode == 200) {
-        final decoded = jsonDecode(outgoingRes.body);
-        if (decoded is Map && decoded['success'] == true) {
-          outgoing = (decoded['data'] ?? []) as List;
-        }
+        final d = jsonDecode(outgoingRes.body);
+        outgoing = (d['data'] ?? []) as List;
       }
 
       final List<Map<String, dynamic>> items = [];
 
-      // Notif permintaan masuk
+      // 1. INCOMING (Permintaan Masuk dari orang lain)
       for (final r in incoming) {
         final item = r as Map<String, dynamic>;
+
+        // Filter Self Sign (Jaga-jaga)
+        final reqId = item['requester_id'];
+        final sigId = item['signer_id'];
+        if (reqId == sigId) continue; // Skip jika requester == signer
+
         items.add({
           'type': 'incoming',
           'raw': item,
@@ -105,24 +95,47 @@ class _NotificationPageState extends State<NotificationPage> {
         });
       }
 
-      // Notif status permintaan (approved / rejected)
+      // 2. OUTGOING (Status update permintaan kita ke orang lain)
       for (final r in outgoing) {
         final item = r as Map<String, dynamic>;
+
+        // --- FILTER PENTING: Hapus Self Sign ---
+        final reqId = item['requester_id'];
+        final sigId = item['signer_id'];
+        final note = (item['note'] ?? '').toString();
+
+        // Jika requester sama dengan signer, berarti itu Self Sign -> SKIP
+        if (reqId == sigId) continue;
+        // Filter tambahan berdasarkan note dari BE
+        if (note == "Self signed document") continue;
+
         final status = (item['status'] ?? 'pending').toString().toLowerCase();
-        if (status == 'pending') continue;
+        if (status == 'pending')
+          continue; // Pending gak perlu notif (kan kita yg minta)
+
+        String type = '';
+        if (status == 'approved')
+          type = 'outgoing_approved';
+        else if (status == 'rejected')
+          type = 'outgoing_rejected';
+        else if (status == 'completed')
+          type = 'outgoing_completed';
+        else
+          continue;
 
         items.add({
-          'type': status == 'approved'
-              ? 'outgoing_approved'
-              : 'outgoing_rejected',
+          'type': type,
           'raw': item,
-          'created_at': item['created_at'],
+          'created_at':
+              item['updated_at'] ??
+              item['created_at'], // Pakai updated_at agar notif muncul saat status berubah
         });
       }
 
+      // Sort by Date Descending (Terbaru diatas)
       items.sort((a, b) {
-        final da = _parseDate(a['created_at']);
-        final db = _parseDate(b['created_at']);
+        final da = DateTime.tryParse(a['created_at'].toString()) ?? DateTime(0);
+        final db = DateTime.tryParse(b['created_at'].toString()) ?? DateTime(0);
         return db.compareTo(da);
       });
 
@@ -131,345 +144,158 @@ class _NotificationPageState extends State<NotificationPage> {
       }
     } catch (e) {
       debugPrint('Error fetch notifications: $e');
-      if (mounted) setState(() => _notifications = []);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  // ---------- UI CARD ----------
+  // --- MARK AS READ ---
+  Future<void> _markAsRead(String key) async {
+    if (_readKeys.contains(key)) return;
+    setState(() => _readKeys.add(key));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('read_notification_keys', _readKeys.toList());
+  }
 
+  // --- HELPERS DATE ---
+  String _formatDate(dynamic v) {
+    if (v == null) return '-';
+    final dt = DateTime.tryParse(v.toString());
+    if (dt == null) return '-';
+    return DateFormat('dd MMM yyyy, HH:mm', 'id_ID').format(dt);
+  }
+
+  // --- UI ---
   Widget _buildNotificationCard(Map<String, dynamic> notif) {
-    final String type = notif['type'] as String;
-    final Map<String, dynamic> raw = notif['raw'] as Map<String, dynamic>;
+    final String type = notif['type'];
+    final Map<String, dynamic> raw = notif['raw'];
     final createdAt = notif['created_at'];
-
-    final int? requestId = raw['request_id'] is int
-        ? raw['request_id'] as int
-        : int.tryParse((raw['request_id'] ?? '').toString());
-
-    final bool isUnread =
-        requestId != null && !_readRequestIds.contains(requestId);
+    final key = _buildNotifKey(raw);
+    final bool isUnread = !_readKeys.contains(key);
 
     IconData icon;
     Color iconColor;
     String title;
     String messageLine;
-    String docTitle = '';
+
+    final docTitle = (raw['Document']?['title'] ?? 'Dokumen').toString();
 
     if (type == 'incoming') {
-      final requester = raw['requester'] as Map<String, dynamic>?;
-      final doc = raw['Document'] as Map<String, dynamic>?;
-
-      final requesterName = (requester?['name'] ?? '-').toString();
-      final requesterEmail = (requester?['email'] ?? '-').toString();
-      docTitle = (doc?['title'] ?? 'Dokumen').toString();
-
+      final requesterName = (raw['requester']?['name'] ?? 'Seseorang')
+          .toString();
       icon = Icons.mark_email_unread_rounded;
       iconColor = primaryColorUI;
-      title = "Permintaan tanda tangan baru";
-      messageLine = "$requesterName ($requesterEmail)\nDokumen: $docTitle";
+      title = "Permintaan Masuk";
+      messageLine = "$requesterName meminta tanda tangan pada '$docTitle'";
     } else if (type == 'outgoing_approved') {
-      final signer = raw['signer'] as Map<String, dynamic>?;
-      final doc = raw['Document'] as Map<String, dynamic>?;
-      final email = (signer?['email'] ?? raw['recipient_email'] ?? '-')
-          .toString();
-      final name = (signer?['name'] ?? '').toString();
-      docTitle = (doc?['title'] ?? 'Dokumen').toString();
-
+      final signerName =
+          (raw['signer']?['name'] ?? raw['recipient_email'] ?? 'Penerima')
+              .toString();
       icon = Icons.check_circle_rounded;
       iconColor = Colors.green;
-      title = "Permintaan disetujui";
-      messageLine =
-          "Oleh: ${name.isNotEmpty ? name : email}\nDokumen: $docTitle";
-    } else {
-      // outgoing_rejected
-      final signer = raw['signer'] as Map<String, dynamic>?;
-      final doc = raw['Document'] as Map<String, dynamic>?;
-      final email = (signer?['email'] ?? raw['recipient_email'] ?? '-')
-          .toString();
-      final name = (signer?['name'] ?? '').toString();
-      docTitle = (doc?['title'] ?? 'Dokumen').toString();
-
+      title = "Permintaan Disetujui";
+      messageLine = "$signerName telah menyetujui permintaan pada '$docTitle'";
+    } else if (type == 'outgoing_rejected') {
+      final signerName =
+          (raw['signer']?['name'] ?? raw['recipient_email'] ?? 'Penerima')
+              .toString();
       icon = Icons.cancel_rounded;
       iconColor = Colors.redAccent;
-      title = "Permintaan ditolak";
+      title = "Permintaan Ditolak";
+      messageLine = "$signerName menolak permintaan pada '$docTitle'";
+    } else {
+      // Completed
+      final signerName = (raw['signer']?['name'] ?? 'Penerima').toString();
+      icon = Icons.done_all_rounded;
+      iconColor = Colors.blue;
+      title = "Tanda Tangan Selesai";
       messageLine =
-          "Oleh: ${name.isNotEmpty ? name : email}\nDokumen: $docTitle";
+          "Dokumen '$docTitle' telah selesai ditandatangani oleh $signerName";
     }
 
-    final Color bgColor = isUnread
-        ? primaryColorUI.withOpacity(0.04)
-        : Colors.white;
-    final Color stripColor = isUnread ? primaryColorUI : Colors.grey.shade300;
-
     return GestureDetector(
-      onTap: () => _openNotificationDetail(notif),
+      onTap: () {
+        _markAsRead(key);
+        // Bisa tambahkan navigasi ke detail jika perlu
+      },
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(16),
+          color: isUnread ? Colors.white : Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isUnread
-                ? primaryColorUI.withOpacity(0.25)
-                : Colors.grey.withOpacity(0.12),
-            width: 1,
+                ? primaryColorUI.withOpacity(0.3)
+                : Colors.transparent,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(isUnread ? 0.08 : 0.04),
-              blurRadius: isUnread ? 10 : 6,
-              offset: const Offset(0, 4),
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // strip kiri
             Container(
-              width: 6,
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: stripColor,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                ),
+                color: iconColor.withOpacity(0.1),
+                shape: BoxShape.circle,
               ),
+              child: Icon(icon, color: iconColor, size: 20),
             ),
+            const SizedBox(width: 12),
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // judul + dot unread
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: isUnread
+                              ? FontWeight.bold
+                              : FontWeight.w600,
+                          fontSize: 14,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      if (isUnread)
                         Container(
-                          height: 38,
-                          width: 38,
-                          decoration: BoxDecoration(
-                            color: iconColor.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(icon, color: iconColor, size: 22),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: TextStyle(
-                              fontWeight: isUnread
-                                  ? FontWeight.w800
-                                  : FontWeight.w600,
-                              fontSize: 14.5,
-                            ),
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
                           ),
                         ),
-                        if (isUnread)
-                          Container(
-                            height: 8,
-                            width: 8,
-                            margin: const EdgeInsets.only(left: 4),
-                            decoration: const BoxDecoration(
-                              color: Colors.redAccent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    messageLine,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isUnread ? Colors.black87 : Colors.black54,
                     ),
-                    const SizedBox(height: 6),
-                    // isi dan tanggal
-                    Text(
-                      messageLine,
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        color: Colors.black87,
-                        height: 1.3,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _formatDate(createdAt),
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Colors.black45,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _formatDate(createdAt),
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                  ),
+                ],
               ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Future<void> _openNotificationDetail(Map<String, dynamic> notif) async {
-    final String type = notif['type'] as String;
-    final Map<String, dynamic> raw = notif['raw'] as Map<String, dynamic>;
-    final createdAt = notif['created_at'];
-
-    final int? requestId = raw['request_id'] is int
-        ? raw['request_id'] as int
-        : int.tryParse((raw['request_id'] ?? '').toString());
-
-    String title;
-    String docTitle = '';
-    String partyName = '';
-    String partyEmail = '';
-    String note = (raw['note'] ?? '').toString();
-
-    if (type == 'incoming') {
-      final requester = raw['requester'] as Map<String, dynamic>?;
-      final doc = raw['Document'] as Map<String, dynamic>?;
-
-      partyName = (requester?['name'] ?? '-').toString();
-      partyEmail = (requester?['email'] ?? '-').toString();
-      docTitle = (doc?['title'] ?? 'Dokumen').toString();
-      title = "Permintaan tanda tangan";
-    } else {
-      final signer = raw['signer'] as Map<String, dynamic>?;
-      final doc = raw['Document'] as Map<String, dynamic>?;
-
-      partyName = (signer?['name'] ?? '').toString();
-      partyEmail = (signer?['email'] ?? raw['recipient_email'] ?? '-')
-          .toString();
-      if (partyName.isEmpty) partyName = partyEmail;
-
-      docTitle = (doc?['title'] ?? 'Dokumen').toString();
-      title = type == 'outgoing_approved'
-          ? "Permintaan disetujui"
-          : "Permintaan ditolak";
-    }
-
-    await showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        insetPadding: const EdgeInsets.symmetric(horizontal: 26, vertical: 24),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // header
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-
-              Text(
-                _formatDate(createdAt),
-                style: const TextStyle(fontSize: 12, color: Colors.black45),
-              ),
-
-              const SizedBox(height: 16),
-
-              Text(
-                type == 'incoming' ? "Dari" : "Kepada",
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                partyName,
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              Text(
-                partyEmail,
-                style: const TextStyle(fontSize: 12.5, color: Colors.black54),
-              ),
-
-              const SizedBox(height: 12),
-
-              const Text(
-                "Dokumen",
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(docTitle, style: const TextStyle(fontSize: 13.5)),
-
-              if (note.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                const Text(
-                  "Catatan",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  note,
-                  style: const TextStyle(fontSize: 13, color: Colors.black87),
-                ),
-              ],
-
-              const SizedBox(height: 18),
-
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: Text("Tutup", style: TextStyle(color: primaryColorUI)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (requestId != null) {
-      _markAsRead(requestId);
-    }
-  }
-
-  Future<void> _markAsRead(int requestId) async {
-    if (_readRequestIds.contains(requestId)) return;
-
-    setState(() {
-      _readRequestIds.add(requestId);
-    });
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      'read_notification_ids',
-      _readRequestIds.map((e) => e.toString()).toList(),
     );
   }
 
@@ -481,28 +307,24 @@ class _NotificationPageState extends State<NotificationPage> {
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _fetchNotifications,
-              color: primaryColorUI,
-              backgroundColor: colorBG,
               child: _notifications.isEmpty
                   ? ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
-                        SizedBox(height: 80),
-                        Center(
+                      children: [
+                        SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.3,
+                        ),
+                        const Center(
                           child: Text(
                             "Belum ada notifikasi",
-                            style: TextStyle(
-                              color: Colors.black54,
-                              fontSize: 15,
-                            ),
+                            style: TextStyle(color: Colors.grey),
                           ),
                         ),
                       ],
                     )
                   : ListView.builder(
-                      physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: _notifications.length,
-                      itemBuilder: (_, i) =>
+                      padding: const EdgeInsets.only(top: 10, bottom: 20),
+                      itemBuilder: (ctx, i) =>
                           _buildNotificationCard(_notifications[i]),
                     ),
             ),

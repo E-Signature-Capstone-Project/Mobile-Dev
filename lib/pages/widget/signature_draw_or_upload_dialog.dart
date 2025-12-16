@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:signature/signature.dart';
 import 'select_pdf_position_page.dart';
 
 class SignatureDrawOrUploadDialog extends StatefulWidget {
@@ -23,14 +22,7 @@ class SignatureDrawOrUploadDialog extends StatefulWidget {
 
 class _SignatureDrawOrUploadDialogState
     extends State<SignatureDrawOrUploadDialog> {
-  final SignatureController _controller = SignatureController(
-    penStrokeWidth: 2,
-    penColor: Colors.black,
-    exportBackgroundColor: Colors.white,
-  );
-
   File? uploadedImage;
-  bool isDrawing = true;
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
@@ -38,26 +30,20 @@ class _SignatureDrawOrUploadDialogState
     if (picked != null) {
       setState(() {
         uploadedImage = File(picked.path);
-        isDrawing = false;
       });
     }
   }
 
   Future<void> _proceed() async {
-    File? sigFile;
-    if (isDrawing) {
-      final bytes = await _controller.toPngBytes();
-      if (bytes == null) return;
-      final file = File(
-        '${Directory.systemTemp.path}/sig_${DateTime.now().millisecondsSinceEpoch}.png',
+    if (!mounted || uploadedImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Silakan upload gambar tanda tangan dulu"),
+        ),
       );
-      await file.writeAsBytes(bytes);
-      sigFile = file;
-    } else {
-      sigFile = uploadedImage;
+      return;
     }
 
-    if (!mounted || sigFile == null) return;
     Navigator.pop(context);
     Navigator.push(
       context,
@@ -66,7 +52,7 @@ class _SignatureDrawOrUploadDialogState
           documentId: widget.documentId,
           pdfUrl: widget.pdfUrl,
           primaryColor: widget.primaryColor,
-          signatureFile: sigFile!,
+          signatureFile: uploadedImage!,
         ),
       ),
     );
@@ -82,101 +68,79 @@ class _SignatureDrawOrUploadDialogState
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              "Tanda Tangan",
+              "Upload Tanda Tangan",
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
             ),
             const SizedBox(height: 15),
 
-            // Area gambar / upload
             Container(
-              height: 200,
+              height: 180,
+              width: double.infinity,
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.black26),
                 borderRadius: BorderRadius.circular(12),
+                color: Colors.grey.shade50,
               ),
-              child: isDrawing
-                  ? Signature(
-                      controller: _controller,
-                      backgroundColor: Colors.white,
+              child: uploadedImage != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(uploadedImage!, fit: BoxFit.contain),
                     )
-                  : (uploadedImage != null
-                        ? Image.file(uploadedImage!, fit: BoxFit.contain)
-                        : const Center(child: Text("Belum ada gambar"))),
-            ),
-
-            // Tombol reset (muncul hanya saat mode menggambar)
-            if (isDrawing) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: _controller.clear,
-                  icon: Icon(
-                    Icons.refresh_rounded,
-                    color: widget.primaryColor,
-                    size: 20,
-                  ),
-                  label: Text(
-                    "Reset",
-                    style: TextStyle(
-                      color: widget.primaryColor,
-                      fontWeight: FontWeight.w500,
+                  : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.image_outlined,
+                          size: 40,
+                          color: Colors.grey.shade400,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Belum ada gambar",
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      ],
                     ),
-                  ),
-                  style: TextButton.styleFrom(
-                    foregroundColor: widget.primaryColor,
-                  ),
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 10),
-
-            // Tombol Gambar / Upload
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => setState(() => isDrawing = true),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: widget.primaryColor),
-                    ),
-                    child: Text(
-                      "Gambar",
-                      style: TextStyle(color: widget.primaryColor),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _pickImage,
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: widget.primaryColor),
-                    ),
-                    child: Text(
-                      "Upload",
-                      style: TextStyle(color: widget.primaryColor),
-                    ),
-                  ),
-                ),
-              ],
             ),
 
             const SizedBox(height: 15),
 
-            ElevatedButton(
-              onPressed: _proceed,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: widget.primaryColor,
-                minimumSize: const Size(double.infinity, 45),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _pickImage,
+                icon: Icon(Icons.upload_file, color: widget.primaryColor),
+                label: Text(
+                  uploadedImage == null ? "Pilih Gambar" : "Ganti Gambar",
+                  style: TextStyle(color: widget.primaryColor),
+                ),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  side: BorderSide(color: widget.primaryColor),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
               ),
-              child: const Text(
-                "Lanjut Pilih Posisi",
-                style: TextStyle(color: Colors.white),
+            ),
+
+            const SizedBox(height: 10),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: uploadedImage == null ? null : _proceed,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: widget.primaryColor,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: const Text(
+                  "Lanjut Pilih Posisi",
+                  style: TextStyle(color: Colors.white),
+                ),
               ),
             ),
           ],

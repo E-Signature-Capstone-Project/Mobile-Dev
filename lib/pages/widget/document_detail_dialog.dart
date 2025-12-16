@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-
-import 'signature_draw_or_upload_dialog.dart';
-import 'request_signature_dialog.dart';
 import '../config/api_config.dart';
+import 'request_signature_dialog.dart';
+import 'signature_draw_or_upload_dialog.dart'; // File yang baru diupdate (tanpa draw)
 
 class DocumentDetailDialog extends StatelessWidget {
   final Map<String, dynamic> document;
@@ -31,6 +30,8 @@ class DocumentDetailDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final title = document['title'] ?? 'Dokumen';
     final pdfUrl = _resolveFileUrl(document);
+    final status = document['status'] ?? 'pending';
+    final isSigned = status == 'signed' || status == 'completed';
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -39,7 +40,6 @@ class DocumentDetailDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Header dokumen
             Row(
               children: [
                 Icon(Icons.picture_as_pdf, color: primaryColor),
@@ -51,6 +51,7 @@ class DocumentDetailDialog extends StatelessWidget {
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 IconButton(
@@ -61,49 +62,71 @@ class DocumentDetailDialog extends StatelessWidget {
             ),
             const SizedBox(height: 20),
 
-            // Tombol Tandatangani Dokumen (self sign)
-            ElevatedButton.icon(
-              icon: const Icon(Icons.edit, color: Colors.white),
-              label: const Text(
-                "Tandatangani Dokumen",
-                style: TextStyle(color: Colors.white),
+            // Tombol Self Sign
+            // Disable jika dokumen sudah ditandatangani
+            if (!isSigned)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.edit, color: Colors.white),
+                label: const Text(
+                  "Tandatangani Dokumen",
+                  style: TextStyle(color: Colors.white),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  minimumSize: const Size(double.infinity, 45),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                onPressed: () async {
+                  await showDialog(
+                    context: context,
+                    builder: (_) => SignatureDrawOrUploadDialog(
+                      documentId: document['document_id'],
+                      pdfUrl: pdfUrl,
+                      primaryColor: primaryColor,
+                    ),
+                  );
+                  onChanged?.call();
+                },
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryColor,
-                minimumSize: const Size(double.infinity, 45),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+
+            if (isSigned)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.shade200),
+                ),
+                child: const Text(
+                  "Dokumen sudah ditandatangani",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
+
+            const SizedBox(height: 10),
+
+            // Tombol Request TTD
+            OutlinedButton.icon(
               onPressed: () async {
-                await showDialog(
+                final result = await showDialog<bool>(
                   context: context,
-                  builder: (_) => SignatureDrawOrUploadDialog(
+                  builder: (_) => RequestSignatureDialog(
                     documentId: document['document_id'],
+                    documentTitle: title,
                     pdfUrl: pdfUrl,
                     primaryColor: primaryColor,
                   ),
                 );
-                onChanged?.call();
-              },
-            ),
 
-            const SizedBox(height: 10),
-
-            // Tombol Request TTD (pakai email)
-            OutlinedButton.icon(
-              onPressed: () async {
-                final ok = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => RequestSignatureDialog(
-                    document: document,
-                    primaryColor: primaryColor,
-                  ),
-                );
-
-                if (ok == true) {
+                if (result == true) {
                   onChanged?.call();
-                  Navigator.pop(context); // tutup dialog ini
                 }
               },
               icon: Icon(Icons.outgoing_mail, color: primaryColor),
